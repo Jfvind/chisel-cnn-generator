@@ -80,3 +80,10 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 *.lnk
+
+#Random spawns
+generator/project/metals.sbt
+.gitignore
+.gitignore
+.gitignore
+generator/project/project/metals.sbt
