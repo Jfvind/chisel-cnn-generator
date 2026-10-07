@@ -71,3 +71,5 @@ def main():
     # 5. Gem modellen
     torch.save(model.state_dict(), OUTPUT_WEIGHTS_FILE)
     print(f"Model gemt til: {OUTPUT_WEIGHTS_FILE}")
+
+main()
