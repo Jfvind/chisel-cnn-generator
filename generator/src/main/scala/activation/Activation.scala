@@ -8,17 +8,13 @@ class Activation(width: Int, activations: Int, shift: Int) extends Module {
 
   val io = IO(new Bundle {
     val sum = Input(SInt(sumMaxSize.W))
-    val act = Output(SInt(width.W))
+    val act = Output(UInt(width.W))
   })
 
-  val relu = Mux(io.sum < 0.S, 0.S, io.sum)
+  val relu = Mux(io.sum < 0.S, 0.U, io.sum.asUInt)
 
   val shifted = relu >> shift // We need to divide the sum with some 2^shift value, to quant
-                              // it down to fit in
+                              // it down to fit inside the output register
 
-  // We clamp the values if the shift chosen is too small
-  val maxVal  = ((BigInt(1) << (width - 1)) - 1).S
-  val clamped = Mux(shifted > maxVal, maxVal, shifted)
-
-  io.act := clamped(width - 1, 0).asSInt
+  io.act := shifted(width - 1, 0)
 }
