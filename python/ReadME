@@ -8,3 +8,6 @@ source venv/bin/activate       # Linux/macOS
 # 3. Update pip and get req
 pip install --upgrade pip
 pip install -r requirements.txt
+
+# 4. Run and train model
+python3 train_model.py
