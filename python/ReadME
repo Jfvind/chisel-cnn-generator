@@ -1,0 +1,14 @@
+# 1. Make virtual env (Python 3.10+)
+python3 -m venv venv
+
+# 2. activate
+source venv/bin/activate       # Linux/macOS
+.\venv\Scripts\activate        # Windows
+# Run `deactivate` to leave the venv if needed
+
+# 3. Update pip and get req
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# 4. Run and train model
+python3 train_model.py

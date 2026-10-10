@@ -3,14 +3,6 @@ Parameterized Chisel generator for CNN inference accelerators on FPGA. Starts wi
 
 
 # Python setup
-
-Tested with 3.13.8.
+See '~/chisel-cnn-generator/python/ReadME'
 
 ## Setup
-
-    cd python
-    python3 -m venv venv
-    source venv/bin/activate        # Windows: venv\Scripts\activate
-    pip install -r requirements.txt
-
-Run `deactivate` to leave the venv.
