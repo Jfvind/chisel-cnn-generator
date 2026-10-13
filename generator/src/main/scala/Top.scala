@@ -18,5 +18,8 @@ class Top() extends Module {
  * Usage: sbt "runMain generator.TopGen"
  */
 object TopGen extends App {
+  val network = service.WeightLoader.load("../python")
+  println(network)
+
   emitVerilog(new Top(), Array("--target-dir", "generated"))
 }
