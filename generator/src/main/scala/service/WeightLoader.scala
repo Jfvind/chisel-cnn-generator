@@ -5,14 +5,15 @@ import scala.io.Source
 import scala.util.Using
 
 import model.{LayerParams, NetworkModel}
+import model.NetworkModel.Bits
 
 /**
  * Loads weights and biases exported by python/train_model.py and quantizes them.
  * Expects files named <index>_weight.csv and <index>_bias.csv in the given directory.
  */
 object WeightLoader {
-    /** Bit width of the quantized signed weights and biases. */
-    val Bits = 8
+    val WeightScale = 1 << (Bits - 1) // real weight in [-1, 1] -> signed Bits-bit
+    val ActMax      = (1 << Bits) - 1 // largest unsigned Bits-bit activation
 
     private val WeightFile = """(\d+)_weight\.csv""".r
 
@@ -22,14 +23,22 @@ object WeightLoader {
 
         val indices = folder.listFiles().map(_.getName).collect { case WeightFile(i) => i.toInt }.sorted
 
+        // Scale of the activations going into the current layer: input pixels 0..255 represent 0.0..1.0
+        var actScale = ActMax.toDouble
+
         val layers = indices.toSeq.map { i =>
             val weights = readCsv(new File(folder, s"${i}_weight.csv"))
             val bias    = readCsv(new File(folder, s"${i}_bias.csv")).flatten
             require(weights.forall(_.length == bias.length),
                 s"Layer $i: weight columns do not match bias length ${bias.length}")
 
-            val shift = computeShift((weights.flatten ++ bias).map(math.abs).max)
-            LayerParams(i, weights.map(_.map(quantize(_, shift))), bias.map(quantize(_, shift)), shift)
+            val qWeights = weights.map(_.map(quantizeWeight))
+            // The MAC adds bias to act * weight, so bias must sit at actScale * WeightScale
+            val qBias    = bias.map(b => math.round(b * actScale * WeightScale).toInt)
+            val shift    = activationShift(qWeights, qBias)
+
+            actScale = actScale * WeightScale / (1 << shift)
+            LayerParams(i, qWeights, qBias, shift)
         }
 
         layers.zip(layers.drop(1)).foreach { case (a, b) =>
@@ -37,17 +46,22 @@ object WeightLoader {
                 s"Layer ${a.index} outputs ${a.outFeatures} but layer ${b.index} expects ${b.inFeatures}")
         }
 
-        NetworkModel(layers, Bits)
+        NetworkModel(layers)
     }
 
-    private val MaxQ = (1 << (Bits - 1)) - 1
+    def quantizeWeight(x: Double): Int = {
+        require(math.abs(x) <= 1.0, s"Weight $x is outside [-1, 1] and would be clamped")
+        math.round(x * WeightScale).toInt.min(WeightScale - 1) // 1.0 -> 127, not 128
+    }
 
-    /** Largest shift so that maxAbs * 2^shift still fits in a signed Bits-bit integer. */
-    def computeShift(maxAbs: Double): Int =
-        if (maxAbs == 0) 0 else math.floor(math.log(MaxQ / maxAbs) / math.log(2)).toInt
-
-    def quantize(x: Double, shift: Int): Int =
-        math.round(x * math.pow(2, shift)).toInt.max(-MaxQ - 1).min(MaxQ)
+    /**
+     * Smallest shift so the largest possible MAC sum fits in an unsigned Bits-bit activation.
+     * Worst case per neuron: every positive weight sees ActMax, every negative weight sees 0.
+     */
+    def activationShift(weights: Seq[Seq[Int]], bias: Seq[Int]): Int = {
+        val maxSum = bias.indices.map(j => ActMax.toLong * weights.map(_(j).max(0)).sum + bias(j)).max
+        Iterator.from(0).find(s => (maxSum >> s) <= ActMax).get
+    }
 
     private def readCsv(file: File): Seq[Seq[Double]] = {
         require(file.isFile, s"Missing file: ${file.getAbsolutePath}")
