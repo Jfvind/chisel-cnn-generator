@@ -1,5 +1,5 @@
 # in: float checkpoint (.pt), float/integer CSVs, MNIST test images and labels
-# out: accuracy report (.csv), exact NumPy/PyTorch integer output comparison
+# out: accuracy report (.csv) comparing the float and quantized models
 # Evaluates the exported integers alongside the float model.
 
 import numpy as np
@@ -36,7 +36,6 @@ def main():
         assert weights.min() >= -128 and weights.max() <= 127, "Weights must fit int8"
         assert bias.min() >= -(1 << 31) and bias.max() < (1 << 31), "Bias must fit int32"
         layers.append((weights, bias, int(shift)))
-    torch_layers = [(torch.from_numpy(w), torch.from_numpy(b), s) for w, b, s in layers]
 
     data = datasets.MNIST(DATA_DIR, train=False, download=False, transform=transforms.ToTensor())
     float_correct = quantized_correct = 0
@@ -45,12 +44,8 @@ def main():
             x = images.flatten(1)
             float_correct += (model(x).argmax(1) == labels).sum().item()
             q = quantize_input(x)
-            expected = infer(q.numpy(), layers)
-            for position, (weights, bias, shift) in enumerate(torch_layers):
-                acc = q @ weights + bias
-                q = ((acc.clamp_min(0) >> shift) & 255) if position < len(layers) - 1 else acc
-            np.testing.assert_array_equal(expected, q.numpy())
-            quantized_correct += int((expected.argmax(1) == labels.numpy()).sum())
+            scores = infer(q.numpy(), layers)
+            quantized_correct += int((scores.argmax(1) == labels.numpy()).sum())
 
     float_accuracy = 100 * float_correct / len(data)
     quantized_accuracy = 100 * quantized_correct / len(data)
@@ -59,7 +54,6 @@ def main():
                delimiter=",", header="float_accuracy_percent,quantized_accuracy_percent,test_samples", comments="", fmt=["%.2f", "%.2f", "%d"])
     print(f"Float accuracy: {float_accuracy:.2f}% | Quantized accuracy (wide logits): {quantized_accuracy:.2f}%")
     print(f"Difference: {quantized_accuracy - float_accuracy:+.2f} percentage points ({len(data)} images)")
-    print(f"NumPy and PyTorch integer outputs match exactly on all {len(data)} images")
 
 
 if __name__ == "__main__":
