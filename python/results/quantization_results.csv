@@ -1,0 +1,2 @@
+float_accuracy_percent,quantized_accuracy_percent,test_samples
+96.61,96.69,10000
