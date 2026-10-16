@@ -1,3 +1,9 @@
+# in: MNIST images and labels, LAYER_SIZES: list[int], training settings
+# out: trained checkpoint (.pt), float weight/bias CSVs, printed test accuracy
+# Trains a float MLP and exports its parameters for the Scala loader.
+
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -9,8 +15,12 @@ ACTIVATION = nn.ReLU               # nn.ReLU, nn.Tanh, nn.LeakyReLU, etc.
 EPOCHS = 3                         # n runthroughs of dataset
 BATCH_SIZE = 64                    # Batchssize during training
 LEARNING_RATE = 0.001              # how big steps a optimizer takes
-DATA_DIR = "./data"                # MNIST download folder
-OUTPUT_WEIGHTS_FILE = "mlp_weights.pt"   # saved PyTorch model
+PYTHON_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = PYTHON_DIR / "data"
+OUTPUT_WEIGHTS_FILE = PYTHON_DIR / "models/mlp_weights.pt"
+CSV_DIR = PYTHON_DIR / "models/csv"
+RESULTS_DIR = PYTHON_DIR / "results"
+QUANTIZED_DIR = PYTHON_DIR.parent / "generator/generated/quantized"
 
 def build_model(layer_sizes, activation_fn):
     """Bygger et dynamisk sekventielt netværk ud fra listen af lag."""
@@ -70,13 +80,16 @@ def main():
     print(f"\nTest Nøjagtighed: {acc:.2f}%")
 
     # 5. save model
+    OUTPUT_WEIGHTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), OUTPUT_WEIGHTS_FILE)
     print(f"Model gemt til: {OUTPUT_WEIGHTS_FILE}")
 
     # 6. Save param + bias as csv
+    CSV_DIR.mkdir(parents=True, exist_ok=True)
     for name, param in model.named_parameters():
-        filename = f"{name.replace('.', '_')}.csv"
+        filename = CSV_DIR / f"{name.replace('.', '_')}.csv"
         np.savetxt(filename, param.detach().numpy().T, delimiter=",") #[in_features, out_features]
         print(f"Gemte {filename}")
 
-main()
+if __name__ == "__main__":
+    main()
