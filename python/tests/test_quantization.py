@@ -1,4 +1,4 @@
-# in: fixed pixel, accumulator and network test cases
+# in: fixed test cases, exported integer CSVs and MNIST test images
 # out: unittest pass/fail results
 # Checks input conversion, activation behavior, final scores and overflow.
 
@@ -6,12 +6,33 @@ import unittest
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
 
 from scripts.evaluate_quantized import quantize_input
 from scripts.integer_reference import infer, requantize
+from scripts.train_model import DATA_DIR, QUANTIZED_DIR
 
 
 class QuantizationTest(unittest.TestCase):
+    def test_numpy_matches_pytorch_on_mnist(self):
+        layers = []
+        parameters = np.loadtxt(QUANTIZED_DIR / "layers.csv", delimiter=",", skiprows=1, dtype=np.int64, ndmin=2)
+        for index, multiplier, shift in parameters:
+            self.assertEqual(multiplier, 1)
+            weights = np.loadtxt(QUANTIZED_DIR / f"{index}_weight.csv", delimiter=",", dtype=np.int64, ndmin=2)
+            bias = np.loadtxt(QUANTIZED_DIR / f"{index}_bias.csv", dtype=np.int64, ndmin=1)
+            layers.append((weights, bias, int(shift)))
+        torch_layers = [(torch.from_numpy(w), torch.from_numpy(b), s) for w, b, s in layers]
+        data = datasets.MNIST(DATA_DIR, train=False, download=False, transform=transforms.ToTensor())
+        for images, _ in DataLoader(data, batch_size=256):
+            inputs = quantize_input(images.flatten(1))
+            q = inputs
+            for position, (weights, bias, shift) in enumerate(torch_layers):
+                acc = q @ weights + bias
+                q = ((acc.clamp_min(0) >> shift) & 255) if position < len(layers) - 1 else acc
+            np.testing.assert_array_equal(infer(inputs.numpy(), layers), q.numpy())
+
     def test_unsigned_input(self):
         pixels = torch.tensor([-0.1, 0.0, 0.5, 1.0, 1.1])
         self.assertEqual(quantize_input(pixels).tolist(), [0, 0, 128, 255, 255])

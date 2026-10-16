@@ -72,10 +72,11 @@ flowchart LR
     D --> E[Wide signed scores: argmax]
 ```
 
-`scripts/integer_reference.py` runs NumPy integer inference. All output scores
-match a separate PyTorch integer pass on 10,000 MNIST test images.
+`scripts/integer_reference.py` runs NumPy integer inference. Evaluation compares
+its accuracy with the float model. A separate test checks every output score
+against a PyTorch integer pass on all 10,000 MNIST test images.
 Layer shapes, ranges and shifts are checked when loading; inference checks MAC overflow.
 Current checkpoint: float **96.61%**, quantized **96.69%** (+0.08 percentage points).
 Saved in `results/quantization_results.csv`.
 
-Tests: `python -m unittest discover -s tests -t .`.
+Tests: `python -m unittest discover -s tests -t .` (requires exported CSVs and local MNIST data).
