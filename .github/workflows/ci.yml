@@ -4,9 +4,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: generator
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -15,4 +12,19 @@ jobs:
           java-version: 17
           cache: sbt
       - uses: sbt/setup-sbt@v1
-      - run: sbt test
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: python/requirements.txt
+      - name: Install Python dependencies
+        run: |
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r python/requirements.txt
+      - name: Scala and Chisel tests and quantized export
+        working-directory: generator
+        run: sbt test "runMain service.WeightExporter"
+      - name: Prepare MNIST test data
+        run: python -c "from torchvision.datasets import MNIST; MNIST('python/data', train=False, download=True)"
+      - name: Python tests
+        run: python -m unittest discover -s python/tests -t python
