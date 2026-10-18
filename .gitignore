@@ -13,7 +13,6 @@ hw/vivado/
 *.bit
 *.bin
 .Xil/
-NA/
 
 # ========================
 # 2. Chisel / Scala
