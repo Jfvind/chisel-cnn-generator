@@ -9,7 +9,7 @@ class MacArray(width: Int, activations: Int) extends Module {
     val io = IO(new Bundle {
         val acts    = Input(Vec(activations, UInt(width.W)))
         val weights = Input(Vec(activations, SInt(width.W)))
-        val bias    = Input(SInt(width.W))
+        val bias    = Input(SInt(sumMaxSize.W))
         val sum     = Output(SInt(sumMaxSize.W))
     })
 
