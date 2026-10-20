@@ -9,6 +9,29 @@ deploy.py               ──► pynq:~/jupyter_notebooks/cnn_accel/  and runs 
 `hw/vivado/` is git-ignored. Only the core inside the shell changes between the adder test and the MLP;
 the block design, register map, driver and scripts stay the same.
 
+## System view on the board
+
+![PS/PL system view and data flow of one Accel.run()](../docs/figures/pynq_system_dataflow.svg)
+
+*Source: [`docs/figures/pynq_system_dataflow.tex`](../docs/figures/pynq_system_dataflow.tex). The inside of
+the `accel` block is drawn in [`shell/README.md`](../generator/src/main/scala/shell/README.md).*
+
+The PS (ARM + DDR, hard silicon) and the PL (our bitstream) talk over two kinds of AXI port:
+
+| Port | Master | Used for | In this design |
+|---|---|---|---|
+| **M_AXI_GP0** (general purpose) | PS (the ARM) | Few, small register reads/writes (AXI-Lite) | ARM → `accel` registers, ARM → DMA control registers |
+| **S_AXI_HP0** (high performance) | PL (the DMA) | Long bursts straight to the DDR controller, bypassing the CPU caches | DMA reads `ibuf` and writes `obuf` |
+
+So the CPU only *controls*: it writes the input into DDR, starts the core and programs the DMA
+(address + length, steps 1-3). The DMA moves the data itself over HP0 and AXI-Stream (steps 4-5), and
+the CPU picks up the result when the DMA reports idle (step 6). Because HP0 bypasses the caches,
+`accel.py` calls `flush()` before and `invalidate()` after each transfer.
+
+PYNQ knows how to drive the DMA because `accel.hwh` lists it as `xilinx.com:ip:axi_dma` with its base
+address, and `pynq.lib.dma.DMA` is a ready-made driver for exactly that IP. Our `accel` block has no
+built-in driver, so `accel.py` maps its registers with `MMIO` and the offsets from `hw_manifest.json`.
+
 ## Prerequisites (checked 2026-10-14)
 
 | What | Status |
