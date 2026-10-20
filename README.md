@@ -8,21 +8,37 @@ flowchart TD
     A[Python training] --> B[Float CSV]
     B --> C[Scala WeightLoader: quantize]
     C --> D[NetworkModel]
-    D -->|WeightExporter| E[Integer CSV + shifts]
+    D -->|WeightExporter| E[Integer CSV + network.json]
     E --> F[Python reference + accuracy]
     A -->|Float checkpoint| F
-    D -.-> G[Chisel hardware: planned]
+    F --> V[Deterministic inputs + expected scores]
+    D -.-> G[MLP core: planned]
+    G -.-> H[AXI shell + PYNQ board]
+    V -.-> T[Bit-exact hardware comparison: planned]
+    H -.-> T
 ```
 
 # Python setup
 See [python/README.md](python/README.md).
 
 
+# Commands
+
+```sh
+make test
+make reference-test WEIGHT_BITS=4 ACTIVATION_BITS=4 BIAS_BITS=32
+```
+
 # quantization
 
-int8 weights, uint8 hidden activations, wide signed final scores.
-Scala uses fixed scales and worst-case bounds to calculate layer shifts.
-Float 96.61%, quantized 96.69% on 10,000 MNIST images.
+Scala owns quantization; Python reads the resulting integers, widths and rules.
+Weight, activation and bias widths are configurable. The existing fixed-scale,
+ReLU/truncating-shift/bit-extraction policy is preserved. Final scores stay wide
+and signed. With the default 8-bit configuration: float 96.61%, integer 96.69%
+on 10,000 MNIST images.
 
 Run: [Quantize and evaluate](python/README.md#quantize-and-evaluate).
-Rules: [Quantization rules](python/README.md#quantization-rules).
+Contract: [Numerical rules](docs/quantization.md) and [export format](docs/export-format.md).
+
+Full Chisel/board comparisons require the future `MlpCore`; the separate AXI
+shell and board workflow are tracked in #38.

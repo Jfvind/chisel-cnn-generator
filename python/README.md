@@ -1,82 +1,66 @@
-# Setup and run model
+# Training and integer reference
+
+Python trains the float model and evaluates it. Scala alone quantizes weights
+and biases. Python's integer reference consumes the exported integers plus
+`network.json`, including bit widths and numerical rules.
 
 ```text
 python/
   scripts/       Training, integer reference and evaluation
-  models/        Trained checkpoint
-    csv/         Readable weight and bias exports
-  results/       Accuracy reports
-  tests/         Python tests
+  models/        Float checkpoint and csv/ parameter exports
+  results/       Accuracy reports, including the selected widths
+  tests/         Contract, arithmetic and reference-vector tests
   data/          MNIST images and labels
 ```
 
-Run the commands below from this directory.
+## Setup
 
-# 1. Make virtual env (Python 3.10+)
-`python3 -m venv venv`
-
-# 2. activate
-`source venv/bin/activate`       # Linux/macOS
-
-`.\venv\Scripts\activate`       # Windows
-
-Run `deactivate` to leave the venv if needed
-
-# 3. Update pip and get req
-`pip install --upgrade pip`
-
-`pip install -r requirements.txt`
-
-# 4. Run and train model
-`python3 -m scripts.train_model`
-
-# Quantize and evaluate
-
-From this directory, with your Python environment activated:
+From this directory, with Python 3.10+:
 
 ```sh
-cd ../generator
-sbt "runMain service.WeightExporter"
+python3 -m venv venv
+source venv/bin/activate  # Windows: .\venv\Scripts\activate
+python -m pip install -r requirements.txt
+```
+
+Optional retraining: `python -m scripts.train_model`. The supplied checkpoint,
+float CSVs and test dataset are enough to repeat evaluation without retraining.
+
+## Quantize and evaluate
+
+From the repository root, using the activated Python environment:
+
+```sh
+make reference-test WEIGHT_BITS=4 ACTIVATION_BITS=4 BIAS_BITS=32
+```
+
+Change only the Scala configuration variables to repeat with another precision.
+There are no bit-width edits in Python. Defaults are 8-bit weights/activations
+and 32-bit bias. `make reference` omits the test run; both targets export fresh
+parameters, evaluate float/integer accuracy and produce 64 deterministic
+input/output vectors. `PYTHON=/path/to/python` selects another environment.
+
+The equivalent commands are:
+
+```sh
+cd generator
+sbt "runMain service.WeightExporter --weight-bits 4 --activation-bits 4 --bias-bits 32"
 cd ../python
 python -m scripts.evaluate_quantized
+python -m unittest discover -s tests -t .
 ```
 
-`WeightLoader` quantizes weights and biases once in Scala. `WeightExporter`
-saves integer CSVs + `layers.csv` in `generator/generated/quantized/`.
-Repeat both commands after retraining.
+The reference is driven by layer metadata rather than hardcoded layer counts.
+The accuracy command specifically evaluates MNIST, so it requires 784 inputs
+and the corresponding float checkpoint. The integer inference/loader can also
+run other dense ReLU network shapes. Evaluation derives the float model's layer
+sizes from the export and checks its float CSVs against the checkpoint.
 
-# Quantization rules
+With the supplied 8-bit configuration the baseline is float **96.61%**, integer
+**96.69%**. The report records the actual widths for each new run. This is a
+comparison of software models; the MLP hardware and board comparisons remain
+future work.
 
-- Pixels and hidden activations: uint8 (0..255); pixels map 0..1 to 0..255.
-- Weights: int8, fixed scale 1/128, zero-point 0. `qw = min(round(w * 128), 127)`;
-  weights outside [-1, 1] are rejected. CSV layout: `[input][output]`.
-- Bias: int32 at input-scale × weight-scale. For real value per input integer
-  `sx`, `qb = round(b * 128 / sx)`. Parameter rounding uses nearest, halves towards +∞.
-- Hidden layers: ReLU → right shift → lowest 8 bits. Shift truncates; no saturation.
-  The loader picks a shift so the worst-case positive output fits 0..255.
-- `layers.csv` stores `index,multiplier,shift`: currently `(0,1,13)` and `(2,1,11)`.
-  Multiplier is 1; hidden output scale is `sx * 2^shift / 128`. Final shift is unused.
-- MAC widths are calculated from the number of inputs: 26/23 signed bits here.
-  Export checks conservative bounds;
-  the reference uses int64 temporaries and rejects MAC/int32 overflow.
-- Final scores stay wide and signed, with no ReLU or shift. Argmax picks the largest;
-  ties pick the lowest index.
-
-# Integer reference
-
-```mermaid
-flowchart LR
-    A[uint8 pixels] --> B[MAC + bias]
-    B --> C[ReLU + shift + lowest 8 bits: uint8]
-    C --> D[Final MAC + bias]
-    D --> E[Wide signed scores: argmax]
-```
-
-`scripts/integer_reference.py` runs NumPy integer inference. Evaluation compares
-its accuracy with the float model. A separate test checks every output score
-against a PyTorch integer pass on all 10,000 MNIST test images.
-Layer shapes, ranges and shifts are checked when loading; inference checks MAC overflow.
-Current checkpoint: float **96.61%**, quantized **96.69%** (+0.08 percentage points).
-Saved in `results/quantization_results.csv`.
-
-Tests: `python -m unittest discover -s tests -t .` (requires exported CSVs and local MNIST data).
+See [quantization rules](../docs/quantization.md) and
+[export/test-vector format](../docs/export-format.md) for the contract, supported
+width ranges and how to consume the same vectors in future hardware tests.

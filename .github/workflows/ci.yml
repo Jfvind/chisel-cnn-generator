@@ -16,3 +16,41 @@ jobs:
           cache: sbt
       - uses: sbt/setup-sbt@v1
       - run: sbt test
+
+  reference:
+    name: Integer reference (${{ matrix.weight }}w/${{ matrix.activation }}a/${{ matrix.bias }}b)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {weight: 4, activation: 4, bias: 32}
+          - {weight: 8, activation: 8, bias: 32}
+          - {weight: 12, activation: 12, bias: 32}
+          - {weight: 4, activation: 8, bias: 16}
+    defaults:
+      run:
+        working-directory: .
+    env:
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: python/requirements.txt
+      - name: Install Python dependencies
+        run: |
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r python/requirements.txt
+      - name: Export Scala parameters, evaluate accuracy and test reference vectors
+        run: make reference-test PYTHON=python WEIGHT_BITS=${{ matrix.weight }} ACTIVATION_BITS=${{ matrix.activation }} BIAS_BITS=${{ matrix.bias }}
