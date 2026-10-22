@@ -72,24 +72,28 @@ class AxiDriver(dut: AccelShellInner, rnd: Random) {
         d
     }
 
-    // send one packet on s_axis, collect m_axis with random backpressure.
-    // returns (received data, indexes of beats that had TLAST)
-    def stream(in: Seq[BigInt]): (Seq[BigInt], Seq[Int]) = {
+    // send one packet on s_axis, collect m_axis with random backpressure (stall = true)
+    // or at full speed (stall = false: TVALID whenever data is left, TREADY always high).
+    // returns (received data, indexes of beats that had TLAST,
+    //          cycle of the first s_axis handshake, cycle of the m_axis handshake with TLAST)
+    def stream(in: Seq[BigInt], stall: Boolean = true): (Seq[BigInt], Seq[Int], Int, Int) = {
         val sIn = dut.io.s_axis; val mOut = dut.io.m_axis
         var sent = 0; var holding = false       // holding = TVALID high, wait for TREADY
         val got = scala.collection.mutable.ArrayBuffer[BigInt]()
         val lasts = scala.collection.mutable.ArrayBuffer[Int]()
         var cyc = 0
+        var firstIn = -1; var lastOut = -1
         while(got.length < in.length) {
-            if(!holding && sent < in.length && rnd.nextInt(4) != 0) holding = true
+            if(!holding && sent < in.length && (!stall || rnd.nextInt(4) != 0)) holding = true
             sIn.tvalid.poke(holding.B)
             if(sent < in.length) { sIn.tdata.poke(in(sent).U); sIn.tlast.poke((sent == in.length - 1).B) }
-            val ready = rnd.nextInt(3) != 0     // ready is true 2/3 of the cycles
+            val ready = !stall || rnd.nextInt(3) != 0     // ready is true 2/3 of the cycles when stalling
             mOut.tready.poke(ready.B)
             val inFire = holding && sIn.tready.peek().litToBoolean
             val outFire = ready && mOut.tvalid.peek().litToBoolean
+            if(inFire && firstIn < 0) firstIn = cyc
             if(outFire) {
-                if(mOut.tlast.peek().litToBoolean) lasts += got.length
+                if(mOut.tlast.peek().litToBoolean) { lasts += got.length; lastOut = cyc }
                 got += mOut.tdata.peek().litValue
             }
             dut.clock.step()
@@ -98,7 +102,7 @@ class AxiDriver(dut: AccelShellInner, rnd: Random) {
             assert(cyc < 20 * in.length + 100, "stream timeout")
         }
         sIn.tvalid.poke(false.B); mOut.tready.poke(false.B)
-        (got.toSeq, lasts.toSeq)
+        (got.toSeq, lasts.toSeq, firstIn, lastOut)
     }
 }
 
@@ -149,7 +153,7 @@ class AccelShellTest extends AnyFlatSpec with ChiselScalatestTester {
             for (len <- Seq(1, 7, 64)) {
                 bus.write(RegMap.CTRL, 1)
                 val in = Seq.fill(len)(BigInt(32, rnd))     // random 32-bit values
-                val (out, lasts) = bus.stream(in)
+                val (out, lasts, _, _) = bus.stream(in)
                 assert(out == in.map(x => (x + addend) & mask32), s"data mismatch for len=$len")
                 assert(lasts == Seq(len - 1), s"TLAST must be on the last beat only, got $lasts")
                 assert((bus.read(RegMap.STATUS) & 2) == 2, "done must be set after the packet")
@@ -157,6 +161,60 @@ class AccelShellTest extends AnyFlatSpec with ChiselScalatestTester {
                 assert(bus.read(RegMap.CYCLES) > 0)
             }
         }
+    }
+
+    it should "count CYCLES from the first input beat to the last output beat" in {
+        test(new AccelShellInner(cfg)) { dut =>
+            val bus = new AxiDriver(dut, new Random(6)); bus.idle()
+            val rnd = new Random(7)
+            // Full speed: n beats through the stub's 1-cycle FIFO take exactly n cycles
+            for (len <- Seq(1, 2, 7, 64)) {
+                bus.write(RegMap.CTRL, 1)
+                assert(bus.read(RegMap.CYCLES) == 0, "start must clear CYCLES")
+                val (_, _, first, last) = bus.stream(Seq.fill(len)(BigInt(32, rnd)), stall = false)
+                assert(last - first == len, s"testbench sanity: expected $len cycles, measured ${last - first}")
+                assert(bus.read(RegMap.CYCLES) == len, s"CYCLES for len=$len at full speed")
+            }
+            // Random backpressure: CYCLES must match the testbench's own measurement exactly
+            for (len <- Seq(1, 7, 64)) {
+                bus.write(RegMap.CTRL, 1)
+                val (_, _, first, last) = bus.stream(Seq.fill(len)(BigInt(32, rnd)))
+                assert(bus.read(RegMap.CYCLES) == last - first, s"CYCLES for len=$len with stalls")
+            }
+            // Without start: the next packet is still measured (counting starts at its first beat)
+            val (_, _, first, last) = bus.stream(Seq.fill(5)(BigInt(32, rnd)), stall = false)
+            assert(bus.read(RegMap.CYCLES) == last - first)
+        }
+    }
+
+    it should "keep m_axis tdata stable while stalled, even if ARG0 changes" in {
+        test(new AccelShellInner(cfg)) { dut =>
+            val bus = new AxiDriver(dut, new Random(8)); bus.idle()
+            bus.write(RegMap.ARG0, 0x10L)
+            // One beat in, then nothing; the receiver is not ready (tready low from idle())
+            dut.io.s_axis.tdata.poke(5.U); dut.io.s_axis.tlast.poke(true.B); dut.io.s_axis.tvalid.poke(true.B)
+            while (!dut.io.s_axis.tready.peek().litToBoolean) dut.clock.step()
+            dut.clock.step()
+            dut.io.s_axis.tvalid.poke(false.B)
+            var n = 0
+            while (!dut.io.m_axis.tvalid.peek().litToBoolean) { dut.clock.step(); n += 1; assert(n < 10) }
+            dut.io.m_axis.tdata.expect(0x15.U)
+            // CPU changes ARG0 while the beat is waiting: TVALID and TDATA must not change
+            bus.write(RegMap.ARG0, 0x9999L)
+            dut.io.m_axis.tvalid.expect(true.B, "TVALID dropped while stalled")
+            dut.io.m_axis.tdata.expect(0x15.U, "TDATA changed while stalled")
+            // Accept it; the next beat uses the new ARG0
+            dut.io.m_axis.tready.poke(true.B); dut.clock.step(); dut.io.m_axis.tready.poke(false.B)
+            val (out, _, _, _) = bus.stream(Seq(BigInt(1)))
+            assert(out == Seq(BigInt(0x999A)))
+        }
+    }
+
+    it should "resolve the stub config so the manifest has nOut = nIn" in {
+        val r = AccelConfig.resolve(AccelConfig(core = "stub", nIn = 784, nOut = 10))
+        assert(r.nOut == 784 && r.nIn == 784)
+        val other = AccelConfig(core = "mlp", nIn = 784, nOut = 10)
+        assert(AccelConfig.resolve(other) == other, "other cores are left unchanged")
     }
 
     it should "emit Verilog with the port names Vivado infers interfaces from" in {

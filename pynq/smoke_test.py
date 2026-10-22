@@ -54,11 +54,12 @@ def main():
         for n in (1, 16, m["n_in"], 4096):      # different cases 
             x = rng.integers(0, mask + 1, size=n, dtype=np.uint64)
             t0 = time.perf_counter()
-            out, cycles = acc.run(x, n_out=n)
+            # n == n_in uses the manifest default (checks the stub's nOut = nIn), others pass n_out
+            out, cycles = acc.run(x) if n == m["n_in"] else acc.run(x, n_out=n)
             dt = time.perf_counter() - t0
             exp = (x + addend) & mask
             mism = int(np.count_nonzero(out.astype(np.uint64) != exp))
-            ok &= check(f"DMA stream n={n}", mism == 0,
+            ok &= check(f"DMA stream n={n}", mism == 0 and cycles >= n,
                         f"{mism} mismatches, RESULT={acc.read('RESULT')}, CYCLES={cycles}, {dt * 1e3:.2f} ms")
         ok &= check("STATUS.done after stream", acc.status["done"])
     else:

@@ -10,7 +10,7 @@ import chisel3.util._
 //              busy, done pulse, result, ovf. The MLP core implements this.
 // AccelCore  : abstract base class (Module with io = CoreIO) + factory that picks
 //              a core by name ("stub" now, "mlp" later).
-// StreamStub : smoke-test core: out = in + ARG0 per beat, TLAST passed through,
+// StreamStub : smoke-test core: out = in + ARG0 per beat (added before the FIFO), TLAST passed through,
 //              done pulses on the last output beat, RESULT = beats in last packet.
 // =============================================================================
 
@@ -40,11 +40,19 @@ object AccelCore {
 }
 
 class StreamStub(cfg: AccelConfig) extends AccelCore(cfg) {
-    val q = Queue(io.in, 2)                             // 2-entry FIFO 
+    // Add BEFORE the FIFO: the FIFO then holds the finished value, so m_axis tdata comes
+    // straight from a register and stays stable while the receiver stalls (AXI-Stream rule),
+    // even if the CPU writes a new ARG0 in the meantime. ARG0 is sampled when a beat enters.
+    val added = Wire(Decoupled(new StreamBeat(cfg.streamW)))
+    added.valid     := io.in.valid
+    added.bits.data := io.in.bits.data + io.args(0)    // Adder logic for the test
+    added.bits.last := io.in.bits.last                 // forward TLAST
+    io.in.ready     := added.ready
+
+    val q = Queue(added, 2)                             // 2-entry FIFO
 
     io.out.valid := q.valid                             // Output valid when FIFO has a beat
-    io.out.bits.data := q.bits.data + io.args(0)        // Adder logic for the test
-    io.out.bits.last := q.bits.last                     // forward TLAST
+    io.out.bits  := q.bits                              // registered data + last, no logic after the FIFO
     q.ready := io.out.ready                             // pop the FIFO when downstream is ready to receive
 
     val beats     = RegInit(0.U(32.W))                  // Beats in current packet

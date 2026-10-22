@@ -61,20 +61,29 @@ class AccelShellInner(cfg: AccelConfig) extends Module {
     io.m_axis.tlast      := core.io.out.bits.last
     core.io.out.ready    := io.m_axis.tready
 
-    // --- STATUS and CYCLES
-    val done     = RegInit(false.B)
+    // --- STATUS.done: sticky, set by the core's done pulse, cleared by start
+    val done = RegInit(false.B)
+    when(start) {
+        done := false.B
+    }.elsewhen(core.io.done) {
+        done := true.B
+    }
+
+    // --- CYCLES: pure accelerator time, independent of Python and DMA setup.
+    // Definition: CYCLES = t_last - t_first, where t_first is the cycle of the first s_axis
+    // handshake of a packet and t_last the cycle of the m_axis handshake carrying TLAST.
+    // (n beats through a 1-cycle pipeline with no stalls gives exactly n.)
+    val inFire   = core.io.in.valid && core.io.in.ready                               // s_axis beat accepted
+    val outLast  = core.io.out.valid && core.io.out.ready && core.io.out.bits.last    // last m_axis beat leaves
     val counting = RegInit(false.B)
     val cycles   = RegInit(0.U(32.W))
 
-    when (start) {
-        done := false.B
-        counting := true.B
+    when(start) { cycles := 0.U; counting := false.B }           // start only resets; counting begins with the data
+    when(counting) { cycles := cycles + 1.U }                     // includes the cycle of the last beat
+    when(counting && outLast) { counting := false.B }             // freeze until the next packet
+    when(!counting && inFire) {                                   // first input beat of a packet
         cycles   := 0.U
-    }.elsewhen(core.io.done) {
-        done     := true.B
-        counting := false.B
-    }.elsewhen(counting) {
-        cycles := cycles + 1.U
+        counting := !outLast                                      // (in and last out in the same cycle: 0)
     }
 
     // --- Read mux: word index -> value

@@ -114,7 +114,9 @@ direction of VALID and the payload; the channel's READY flows the other way. Sou
 3. For reads, `AxiLiteSlave` exposes `rdAddr`; the register file answers combinationally
    through a `MuxLookup`, and the slave captures `rdData` at the AR handshake.
 4. The core reports back `busy`, `done` (pulse), `result`, `ovf`. The shell turns `done`
-   into the sticky `STATUS.done` bit and stops the `CYCLES` counter started by `start`.
+   into the sticky `STATUS.done` bit. `CYCLES` counts from the first `s_axis` handshake of a packet
+   to the `m_axis` handshake carrying TLAST, so it measures only the accelerator (not Python or DMA setup);
+   `start` clears both.
 
 **Data path.** No logic, only renaming: AXI-Stream (`tvalid/tready/tdata`) and Chisel's
 `Decoupled` (`valid/ready/bits`) are the same handshake, and `tlast` travels as `bits.last`.
@@ -157,7 +159,7 @@ compares them with the manifest to catch a stale bitstream.
  ARM (accel.py)                        PL fabric
  ─────────────                         ─────────
  1. copy input into a DDR buffer
- 2. write CTRL.start ─── GP0 ─▶ interconnect ─▶ accel s_axi   (clears done, starts CYCLES)
+ 2. write CTRL.start ─── GP0 ─▶ interconnect ─▶ accel s_axi   (clears done and CYCLES)
  3. arm DMA receive, start DMA send ─▶ interconnect ─▶ AXI DMA control
                                        AXI DMA ── HP0 ─▶ reads DDR ── s_axis ─▶ core
                                        core ── m_axis (+TLAST) ─▶ AXI DMA ── HP0 ─▶ writes DDR

@@ -29,6 +29,16 @@ case class AccelConfig(
     val cfgHash: Long = (this.toString.hashCode.toLong & 0xFFFFFFFFL) // & 0xFFFFFFFF ensures unsigned 32-bit
 }
 
+object AccelConfig {
+    // Core-specific rules, applied by ShellGen before anything is generated, so that the
+    // manifest the driver reads describes what the hardware really does.
+    // stub: returns one output beat per input beat, so nOut must equal nIn.
+    def resolve(cfg: AccelConfig): AccelConfig = cfg.core match {
+        case "stub" => cfg.copy(nOut = cfg.nIn)
+        case _      => cfg
+    }
+}
+
 // Byte offset for AXI-Lite 32-bit registers
 object RegMap {
     val CTRL      = 0x00 // W: bit0 = start (pulse), bit1 = soft reset of core
@@ -37,7 +47,7 @@ object RegMap {
     val CFG_HASH  = 0x0C // R
     val N_IN      = 0x10 // R
     val N_OUT     = 0x14 // R
-    val CYCLES    = 0x18 // R: cycles from start to done
+    val CYCLES    = 0x18 // R: cycles from first s_axis beat to last m_axis beat (TLAST)
     val OVF_COUNT = 0x1C // R: saturated activations in core (test on clipping)
     val RESULT    = 0x20 // R: defined by core, (MLP: argmax)
     val ARG0      = 0x40 // RW: ARG0-ARG3, 0x40, 0x44, 0x48, 0x4C

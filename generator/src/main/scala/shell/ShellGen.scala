@@ -28,7 +28,7 @@ object ShellGen extends App {           // App provides args from CLI
         if (i >= 0 && i + 1 < args.length) args(i+1) else default
     }
 
-    val cfg = AccelConfig(
+    val requested = AccelConfig(
         core    = argOr("core", "stub"),
         nIn     = argOr("nIn", "784").toInt,
         nOut    = argOr("nOut", "10").toInt,
@@ -36,6 +36,8 @@ object ShellGen extends App {           // App provides args from CLI
         addrW   = argOr("addrW", "12").toInt,
         fclkMhz = argOr("fclkMhz", "100").toInt
     )
+    val cfg = AccelConfig.resolve(requested)       // core-specific rules (stub: nOut = nIn)
+    if (cfg != requested) println(s"[ShellGen] adjusted for core '${cfg.core}': $requested -> $cfg")
     val outDir = new File(argOr("out", "../hw/vivado/rtl"))
     outDir.mkdirs()
 

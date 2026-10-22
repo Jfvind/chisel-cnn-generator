@@ -85,7 +85,7 @@ Expected board output ends with `ALL PASSED`. The overlay and `smoke_test.py` al
 | 0x08 | ID | R | 0xDEADBEEF (`AccelConfig.id`) |
 | 0x0C | CFG_HASH | R | must equal `cfg_hash` in hw_manifest.json |
 | 0x10 / 0x14 | N_IN / N_OUT | R | packet sizes |
-| 0x18 | CYCLES | R | clock cycles start → done |
+| 0x18 | CYCLES | R | clock cycles from the first `s_axis` beat to the `m_axis` beat with TLAST (start resets it) |
 | 0x1C | OVF_COUNT | R | activations that saturated (core-defined) |
 | 0x20 | RESULT | R | core-defined (MLP: argmax; stub: beats in last packet) |
 | 0x40–0x4C | ARG0–ARG3 | RW | passed to the core as `io.args` |
