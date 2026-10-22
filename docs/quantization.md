@@ -21,7 +21,8 @@ the accuracy baseline. The integer reference is the future hardware's bit-exact 
 The present hardware primitives use a shared weight/activation width. Different
 weight and activation widths are supported by the parameter export/reference;
 the future MLP core must explicitly support their combination before synthesis.
-No `MlpCore` is implemented here, and the AXI shell still runs the #38 stub.
+No `MlpCore` is implemented here. The AXI shell and board workflow are tracked
+separately in #38.
 
 ## Rules
 

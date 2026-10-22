@@ -30,7 +30,7 @@ object WeightLoader {
                 s"Layer $i: weight columns do not match bias length ${bias.length}")
             config.accumulatorBits(weights.length)
 
-            val qWeights = weights.map(_.map(w => quantizeWeight(w, config.weightBits)))
+            val qWeights = weights.map(_.map(w => quantizeWeight(w, config)))
             // The MAC adds bias to act * weight, so bias uses their product scale.
             val qBias = bias.map { b =>
                 val scaled = b * actScale * config.weightScale
@@ -40,7 +40,7 @@ object WeightLoader {
                 require(rounded >= -limit && rounded < limit, s"Layer $i: bias does not fit ${config.biasBits} bits")
                 rounded.toInt
             }
-            val shift = activationShift(qWeights, qBias, config.activationBits)
+            val shift = activationShift(qWeights, qBias, config)
 
             actScale = math.scalb(actScale * config.weightScale, -shift)
             LayerParams(i, qWeights, qBias, shift)
@@ -54,8 +54,8 @@ object WeightLoader {
         NetworkModel(layers, config)
     }
 
-    def quantizeWeight(x: Double, bits: Int = 8): Int = {
-        val scale = QuantizationConfig(weightBits = bits).weightScale
+    def quantizeWeight(x: Double, config: QuantizationConfig = QuantizationConfig()): Int = {
+        val scale = config.weightScale
         require(x.isFinite && math.abs(x) <= 1.0, s"Weight $x is outside [-1, 1] and would be clamped")
         math.round(x * scale).toInt.min(scale - 1)
     }
@@ -63,8 +63,8 @@ object WeightLoader {
     /**
      * Smallest shift so the worst-case positive sum fits the activation width.
      */
-    def activationShift(weights: Seq[Seq[Int]], bias: Seq[Int], activationBits: Int = 8): Int = {
-        val actMax = QuantizationConfig(activationBits = activationBits).activationMax
+    def activationShift(weights: Seq[Seq[Int]], bias: Seq[Int], config: QuantizationConfig = QuantizationConfig()): Int = {
+        val actMax = config.activationMax
         val maxSum = bias.indices.map(j => BigInt(actMax) * weights.map(row => BigInt(row(j).max(0))).sum + bias(j)).max
         (0 until 63).find(s => (maxSum >> s) <= actMax).getOrElse(
             throw new IllegalArgumentException("Activation shift exceeds the reference arithmetic width"))

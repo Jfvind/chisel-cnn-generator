@@ -47,7 +47,7 @@ cannot be treated as the current reference.
 
 A future ChiselTest can feed `test_inputs.csv` into `MlpCore` and compare every
 score to `expected_outputs.csv`. The board test can use the same files. The
-current shell smoke test exercises the addition stub, so it cannot perform that
+shell smoke test in #38 exercises the addition stub, so it cannot perform that
 comparison yet. Signed score representation on AXI must be agreed when adding
 the core: an 8-bit stream beat cannot hold a wide score in one beat, and the
-existing generic PYNQ driver returns unsigned raw words.
+generic PYNQ driver in #38 returns unsigned raw words.

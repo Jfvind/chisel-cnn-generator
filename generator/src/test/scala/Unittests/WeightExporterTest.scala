@@ -42,11 +42,14 @@ class WeightExporterTest extends AnyFlatSpec {
     }
 
     it should "use the configured weight and activation widths independently" in {
-        assert(WeightLoader.quantizeWeight(0.5, 4) == 4)
-        assert(WeightLoader.quantizeWeight(1.0, 4) == 7)
-        assert(WeightLoader.quantizeWeight(-1.0, 4) == -8)
-        assert(WeightLoader.activationShift(Seq(Seq(1, -2), Seq(3, 4)), Seq(10, -5), 4) == 3)
         val config = QuantizationConfig(weightBits = 4, activationBits = 8, biasBits = 16)
+        val narrowActivations = config.copy(activationBits = 4)
+        assert(WeightLoader.quantizeWeight(0.5, config) == 4)
+        assert(WeightLoader.quantizeWeight(1.0, config) == 7)
+        assert(WeightLoader.quantizeWeight(-1.0, config) == -8)
+        assert(WeightLoader.activationShift(Seq(Seq(1, -2), Seq(3, 4)), Seq(10, -5), narrowActivations) == 3)
+        assert(WeightLoader.activationShift(Seq(Seq(1)), Seq(240), config) == 1)
+        assert(WeightLoader.activationShift(Seq(Seq(1)), Seq(240), narrowActivations) == 4)
         val network = WeightLoader.load("../python/models/csv", config)
         assert(network.quantization == config)
         assert(network.layers.head.weights.flatten.forall(w => w >= -8 && w <= 7))
