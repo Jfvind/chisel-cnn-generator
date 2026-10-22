@@ -31,7 +31,7 @@ RUN 	 ?= $($(CORE)_RUN)
 FCLK_MHZ ?= 100
 NAME     ?= accel
 JOBS     ?= 8
-HOST     ?= pynq
+HOST     ?= pynq-direct,pynq
 
 # --- Tools (windows detection) ---
 ifeq ($(OS),Windows_NT)

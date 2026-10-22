@@ -38,7 +38,7 @@ built-in driver, so `accel.py` maps its registers with `MMIO` and the offsets fr
 |---|---|
 | Vivado | 2024.1 installed in `C:\Xilinx\Vivado\2024.1`. Matches PYNQ v3.1 images (built with 2024.1). If the board runs v3.0.x (built with 2022.1), simple overlays like this one normally still load; if `Overlay()` fails parsing the `.hwh`, that mismatch is the first suspect. `smoke_test.py` prints the board's PYNQ version. |
 | PYNQ-Z2 board files | Were **not** installed in Vivado. Now vendored in `hw/boards/TUL/pynq-z2` (from Xilinx/XilinxBoardStore) and loaded by `build.tcl` via `board.repoPaths`, so nothing needs installing. |
-| Board on the network | Jupyter answers at `http://pynq:9090`, so SSH work as `xilinx@pynq`. |
+| Board on the network | Router: `pynq` via DHCP/DNS, Jupyter at `http://pynq:9090`. Direct cable: the board always also has `192.168.2.99` (alias `eth0:1`), Jupyter at `http://192.168.2.99:9090`. `deploy.py` tries `pynq-direct`, then `pynq`. |
 | SSH key + sudo | One-time, see below. |
 
 ### One-time board setup (from PowerShell)
@@ -49,6 +49,20 @@ type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh xilinx@pynq "mkdir -p ~/.ssh && 
 # Optional, lets build.tcl run the test without a password prompt:
 ssh -t xilinx@pynq "echo 'xilinx ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/xilinx-nopasswd"
 ```
+
+### Direct cable to the PC (no router)
+
+Give the PC's Ethernet adapter a fixed address in the board's subnet, without a gateway
+(internet stays on Wi-Fi). Admin PowerShell, adapter name from `Get-NetAdapter`:
+
+```powershell
+Set-NetIPInterface -InterfaceAlias "Ethernet 5" -Dhcp Disabled
+New-NetIPAddress   -InterfaceAlias "Ethernet 5" -IPAddress 192.168.2.1 -PrefixLength 24
+```
+
+Add `pynq-direct` (HostName 192.168.2.99, User xilinx) to `~/.ssh/config`. On the cable
+the board has no internet, so install packages on the board while it is on the router.
+Back to DHCP: `Set-NetIPInterface -InterfaceAlias "Ethernet 5" -Dhcp Enabled`.
 
 ## Running it
 
