@@ -54,13 +54,19 @@ object WeightLoader {
         math.round(x * WeightScale).toInt.min(WeightScale - 1) // 1.0 -> 127, not 128
     }
 
+    val TypicalSigmas = 3 // how far above the mean sum a "typical" sum may reach before it clamps
+
     /**
-     * Smallest shift so the largest possible MAC sum fits in an unsigned Bits-bit activation.
-     * Worst case per neuron: every positive weight sees ActMax, every negative weight sees 0.
+     * Smallest shift so a typical MAC sum fits in an unsigned Bits-bit activation; larger sums clamp.
+     * Estimated from the weights only: inputs are assumed uniform over 0..ActMax, so per neuron j
+     * typical_j = mean + TypicalSigmas * std = ActMax/2 * sum(w) + b + TypicalSigmas * ActMax/sqrt(12) * sqrt(sum(w^2)).
      */
     def activationShift(weights: Seq[Seq[Int]], bias: Seq[Int]): Int = {
-        val maxSum = bias.indices.map(j => ActMax.toLong * weights.map(_(j).max(0)).sum + bias(j)).max
-        Iterator.from(0).find(s => (maxSum >> s) <= ActMax).get
+        val typical = bias.indices.map { j =>
+            val col = weights.map(_(j).toDouble)
+            ActMax / 2.0 * col.sum + bias(j) + TypicalSigmas * ActMax / math.sqrt(12) * math.sqrt(col.map(w => w * w).sum)
+        }.max
+        Iterator.from(0).find(s => typical / (1L << s) <= ActMax).get
     }
 
     private def readCsv(file: File): Seq[Seq[Double]] = {

@@ -16,7 +16,8 @@ case class AccelConfig(
     nOut: Int = 10,                 // output beats per inference (MNIST: 0-9)
     streamW: Int = 32,              // AXI-stream width (bits)
     addrW: Int = 12,                // AXI-Lite address bit-width (2^12 = 4 KB)
-    fclkMhz: Int = 100              // PL clock requested from Zynq PS
+    fclkMhz: Int = 100,             // PL clock requested from Zynq PS
+    weightBiasDir: String = "../python"   // mlp: dir with <i>_weight.csv / <i>_bias.csv (relative to generator/)
 ) {
     // checks at elaboration
     require(Seq(8, 16, 32, 64).contains(streamW), s"streamW must be 8/16/32/64, got $streamW")

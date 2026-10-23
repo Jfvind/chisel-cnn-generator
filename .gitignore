@@ -88,3 +88,9 @@ generator/project/metals.sbt
 .gitignore
 .gitignore
 generator/project/project/metals.sbt
+
+# MlpCore weight-bank hex files (written at elaboration)
+generator/generated/
+
+
+.archify
