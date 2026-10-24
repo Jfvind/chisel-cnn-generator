@@ -34,7 +34,7 @@ abstract class AccelCore(val cfg: AccelConfig) extends Module {
 object AccelCore {
     def apply(cfg: AccelConfig): AccelCore = cfg.core match {
         case "stub" => new StreamStub(cfg)
-        // case "mlp" => new MlpCore(cfg)
+        case "mlp"  => new mlp.MlpCore(cfg, AccelConfig.network(cfg))
         case other => throw new IllegalArgumentException(s"Unknown core '$other'")
     }
 }

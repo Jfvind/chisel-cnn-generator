@@ -1,9 +1,11 @@
 package model
 
-case class QuantizationConfig(weightBits: Int = 8, activationBits: Int = 8, biasBits: Int = 32) {
+// shiftPolicy: how WeightLoader picks each hidden layer's shift, "worst" (never clamps) or "typical" (see WeightLoader)
+case class QuantizationConfig(weightBits: Int = 8, activationBits: Int = 8, biasBits: Int = 32, shiftPolicy: String = "worst") {
     require(weightBits >= 2 && weightBits <= 16, "Weight width must be 2..16 bits")
     require(activationBits >= 1 && activationBits <= 16, "Activation width must be 1..16 bits")
     require(biasBits >= 2 && biasBits <= 32, "Bias width must be 2..32 bits")
+    require(Set("worst", "typical").contains(shiftPolicy), s"Shift policy must be worst or typical, got $shiftPolicy")
 
     val weightScale: Int = 1 << (weightBits - 1)
     val activationMax: Int = (1 << activationBits) - 1

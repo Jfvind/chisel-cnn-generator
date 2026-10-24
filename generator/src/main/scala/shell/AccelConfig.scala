@@ -1,5 +1,8 @@
 package shell
 
+import model.{NetworkModel, QuantizationConfig}
+import service.WeightLoader
+
 // =============================================================================
 // AccelConfig.scala — the single source of truth shared by Chisel, Vivado and PYNQ.
 //
@@ -16,7 +19,12 @@ case class AccelConfig(
     nOut: Int = 10,                 // output beats per inference (MNIST: 0-9)
     streamW: Int = 32,              // AXI-stream width (bits)
     addrW: Int = 12,                // AXI-Lite address bit-width (2^12 = 4 KB)
-    fclkMhz: Int = 100              // PL clock requested from Zynq PS
+    fclkMhz: Int = 100,             // PL clock requested from Zynq PS
+    weightBiasDir: String = "../python/models/csv", // mlp: dir with <i>_weight.csv / <i>_bias.csv (relative to generator/)
+    weightBits: Int = 8,                            // mlp: quantization (QuantizationConfig)
+    actBits: Int = 8,
+    shiftPolicy: String = "worst",                  // mlp: "worst" (never clamps) or "typical", see WeightLoader
+    paramHash: Long = 0                             // set by resolve: the weights are part of CFG_HASH
 ) {
     // checks at elaboration
     require(Seq(8, 16, 32, 64).contains(streamW), s"streamW must be 8/16/32/64, got $streamW")
@@ -30,11 +38,21 @@ case class AccelConfig(
 }
 
 object AccelConfig {
+    // mlp: load the float CSVs and quantize them with this config's widths and shift policy
+    def network(cfg: AccelConfig): NetworkModel =
+        WeightLoader.load(cfg.weightBiasDir, QuantizationConfig(cfg.weightBits, cfg.actBits, shiftPolicy = cfg.shiftPolicy))
+
     // Core-specific rules, applied by ShellGen before anything is generated, so that the
     // manifest the driver reads describes what the hardware really does.
     // stub: returns one output beat per input beat, so nOut must equal nIn.
+    // mlp:  nIn/nOut come from the network, and the weights go into CFG_HASH, so a bitstream
+    //       built from other weights is caught by the driver's hash check.
     def resolve(cfg: AccelConfig): AccelConfig = cfg.core match {
         case "stub" => cfg.copy(nOut = cfg.nIn)
+        case "mlp"  =>
+            val net = network(cfg)
+            cfg.copy(nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures,
+                     paramHash = net.hashCode.toLong & 0xFFFFFFFFL)
         case _      => cfg
     }
 }

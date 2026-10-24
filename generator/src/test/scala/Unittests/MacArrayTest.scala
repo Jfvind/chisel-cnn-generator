@@ -8,53 +8,52 @@ import scala.util.Random
 class MacArrayTest extends AnyFlatSpec with ChiselScalatestTester {
     behavior of "MacArray"
 
-    val width = 8
-    val activations   = 4
-    val min   = -(1 << (width - 1))    // -128
-    val max   = (1 << (width - 1)) - 1 //  127
-    val actMax = (1 << width) - 1      //  255, acts are unsigned (output of ReLU)
+    val width  = 8
+    val lanes  = 4
+    val accW   = 26
+    val wMin   = -(1 << (width - 1))
+    val wMax   = (1 << (width - 1)) - 1
+    val actMax = (1 << width) - 1
 
-    def check(dut: MacArray, acts: Seq[Int], weights: Seq[Int], bias: Int): Unit = {
-        for (i <- 0 until activations) {
-            dut.io.acts(i).poke(acts(i).U)
-            dut.io.weights(i).poke(weights(i).S)
-        }
-        dut.io.bias.poke(bias.S)
-        val expected = acts.zip(weights).map { case (a, w) => a * w }.sum + bias
-        dut.io.sum.expect(expected.S)
+    def step(dut: MacArray, a: Int, ws: Seq[Int], en: Boolean = true, clear: Boolean = false): Unit = {
+        dut.io.a.poke(a.U)
+        for (n <- 0 until lanes) dut.io.w(n).poke(ws(n).S)
+        dut.io.en.poke(en.B); dut.io.clear.poke(clear.B)
+        dut.clock.step()
     }
 
-    it should "compute a simple dot product" in {
-        test(new MacArray(width, activations)) { dut =>
-            check(dut, Seq(1, 2, 3, 4),   Seq(1, 1, 1, 1), 0) // 10
-            check(dut, Seq(1, 2, 3, 4),   Seq(2, -2, 2, -2), 5) // -4 + 5 = 1
-        }
-    }
+    def expectAcc(dut: MacArray, model: Seq[Long]): Unit =
+        for (n <- 0 until lanes) dut.io.acc(n).expect(model(n).S, s"lane $n")
 
-    it should "not overflow at extreme values" in {
-        test(new MacArray(width, activations)) { dut =>
-            check(dut, Seq.fill(activations)(actMax), Seq.fill(activations)(max), max) // largest positive sum
-            check(dut, Seq.fill(activations)(actMax), Seq.fill(activations)(min), min) // largest negative sum
+    it should "broadcast a to every lane, each with its own weight" in {
+        test(new MacArray(width, lanes, accW)) { dut =>
+            step(dut, 10, Seq(1, 2, -3, 0))
+            step(dut, 4,  Seq(5, -5, 1, 7))
+            expectAcc(dut, Seq(10 + 20, 20 - 20, -30 + 4, 0 + 28))
         }
     }
 
-    it should "multiply a positive activation with a negative weight correctly" in {
-        test(new MacArray(width, activations)) { dut =>
-            // Acts >= 128 have the MSB set, so they must not be treated as negative
-            check(dut, Seq(200, 0, 0, 0),   Seq(-3, 0, 0, 0),    0)  // 200 * -3 = -600
-            check(dut, Seq(actMax, 0, 0, 0), Seq(min, 0, 0, 0),  0)  // 255 * -128 = -32640
-            check(dut, Seq(10, 200, 0, 0),  Seq(5, -1, 0, 0),    0)  // 50 - 200 = -150
-            check(dut, Seq(150, 100, 0, 0), Seq(-2, 4, 0, 0),    -7) // -300 + 400 - 7 = 93
+    it should "apply clear and en to every lane" in {
+        test(new MacArray(width, lanes, accW)) { dut =>
+            step(dut, 3, Seq(1, 2, 3, 4))
+            step(dut, 9, Seq(9, 9, 9, 9), en = false)
+            expectAcc(dut, Seq(3, 6, 9, 12))
+            step(dut, 9, Seq(9, 9, 9, 9), clear = true)
+            expectAcc(dut, Seq(0, 0, 0, 0))
         }
     }
 
     it should "match a software model on random inputs" in {
-        val rnd = new Random(42)
-        def r() = rnd.nextInt(max - min + 1) + min
-        def rAct() = rnd.nextInt(actMax + 1)
-        test(new MacArray(width, activations)) { dut =>
-            for (_ <- 0 until 100) {
-                check(dut, Seq.fill(activations)(rAct()), Seq.fill(activations)(r()), r())
+        val rnd = new Random(7)
+        test(new MacArray(width, lanes, accW)) { dut =>
+            var model = Seq.fill(lanes)(0L)
+            for (_ <- 0 until 300) {
+                val a  = rnd.nextInt(actMax + 1)
+                val ws = Seq.fill(lanes)(rnd.nextInt(wMax - wMin + 1) + wMin)
+                val en = rnd.nextInt(4) != 0; val clear = rnd.nextInt(25) == 0
+                step(dut, a, ws, en, clear)
+                model = model.zip(ws).map { case (m, w) => if (clear) 0L else if (en) m + a * w else m }
+                expectAcc(dut, model)
             }
         }
     }

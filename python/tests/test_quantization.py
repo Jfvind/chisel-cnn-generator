@@ -18,7 +18,7 @@ class QuantizationTest(unittest.TestCase):
         return {"schema_version": 1, "input_bits": bits, "activation_bits": bits,
                 "weight_bits": bits, "bias_bits": 32, "weight_signed": True,
                 "activation_signed": False, "parameter_rounding": "nearest_ties_positive",
-                "shift_rounding": "truncate", "activation_overflow": "wrap", "accumulator_overflow": "reject",
+                "shift_rounding": "truncate", "activation_overflow": "saturate", "accumulator_overflow": "reject",
                 "layers": layers or [
                     {"index": 0, "in_features": 2, "out_features": 2, "accumulator_bits": 2 * bits + 1,
                      "multiplier": 1, "shift": 1, "activation": "relu", "weights": [[2, -1], [-1, 2]], "bias": [1, -3]},
@@ -42,7 +42,7 @@ class QuantizationTest(unittest.TestCase):
                 self.assertEqual(quantize_input([-0.1, 0, 0.5, 1, 1.1], network["input_bits"]).tolist(),
                                  [0, 0, (maximum + 1) // 2, maximum, maximum])
                 self.assertEqual(requantize([-3, 0, maximum, maximum + 1, maximum + 3], 0, bits).tolist(),
-                                 [0, 0, maximum, 0, 2])
+                                 [0, 0, maximum, maximum, maximum])  # saturates, does not wrap
                 self.assertEqual(infer([[2, 3], [0, 1]], network).tolist(), [[1, -1], [-2, 1]])
                 with self.assertRaisesRegex(ValueError, "configured width"):
                     infer([[maximum + 1, 0]], network)
@@ -82,7 +82,7 @@ class QuantizationTest(unittest.TestCase):
 
     def test_invalid_contracts_are_rejected(self):
         cases = [("schema_version", 2), ("weight_bits", 0), ("bias_bits", 64),
-                 ("activation_signed", True), ("shift_rounding", "nearest"), ("activation_overflow", "saturate")]
+                 ("activation_signed", True), ("shift_rounding", "nearest"), ("activation_overflow", "wrap")]
         for key, value in cases:
             with self.subTest(key=key), tempfile.TemporaryDirectory() as temporary:
                 network = self.network()
@@ -135,7 +135,7 @@ class QuantizationTest(unittest.TestCase):
             q = torch.from_numpy(inputs)
             for layer in network["layers"]:
                 acc = q @ torch.from_numpy(layer["weights"]) + torch.from_numpy(layer["bias"])
-                q = ((acc.clamp_min(0) >> layer["shift"]) & ((1 << network["activation_bits"]) - 1)) if layer["activation"] == "relu" else acc
+                q = (acc.clamp_min(0) >> layer["shift"]).clamp_max((1 << network["activation_bits"]) - 1) if layer["activation"] == "relu" else acc
             np.testing.assert_array_equal(infer(inputs, network), q.numpy())
         metadata = json.loads((directory / "test_vectors.json").read_text())
         self.assertEqual(metadata["parameter_sha256"], parameter_digest(directory, network))
