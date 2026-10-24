@@ -105,9 +105,18 @@ Expected board output ends with `ALL PASSED`. The overlay and `smoke_test.py` al
 | 0x40–0x4C | ARG0–ARG3 | RW | passed to the core as `io.args` |
 | 0x50 | SUM | R | ARG0 + ARG1 (adder smoke test) |
 
-## Adding the MLP
+## The MLP core
 
-1. Write `class MlpCore(cfg: AccelConfig) extends AccelCore(cfg)` implementing `CoreIO`
-   (consume `nIn` beats, produce `nOut` beats, **set `last` on the final output beat**).
-2. Add `case "mlp" => new MlpCore(cfg)` in `AccelCore.apply` (`generator/src/main/scala/shell/Core.scala`).
-3. `make board CORE=mlp STREAM_W=8` — no change to Tcl, driver or block design.
+`MlpCore` (`generator/src/main/scala/mlp/`) runs the whole network on one column of MACs, one per
+neuron of the widest layer; layer 0 consumes the pixels straight from the stream. 925 cycles per image
+for 784 -> 128 -> 10 at full speed.
+
+```bash
+make board CORE=mlp                         # 32-bit beats: 784 pixels in, 10 signed scores out
+make board CORE=mlp SHIFT_POLICY=typical    # more activation precision, some activations saturate
+```
+
+The weights are quantized from `WEIGHTS` (default `python/models/csv`) with `WEIGHT_BITS` /
+`ACTIVATION_BITS` / `SHIFT_POLICY` and baked into BRAM (one bank per lane, `$readmemh`). They are part of
+`CFG_HASH`, so a manifest from other weights is rejected by the driver. `RESULT` = argmax,
+`OVF_COUNT` = hidden activations that saturated since the last start (always 0 with `SHIFT_POLICY=worst`).

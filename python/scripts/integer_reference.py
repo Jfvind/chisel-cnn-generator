@@ -19,7 +19,7 @@ def load_network(directory):
     rules = {
         "schema_version": 1, "weight_signed": True, "activation_signed": False,
         "parameter_rounding": "nearest_ties_positive", "shift_rounding": "truncate",
-        "activation_overflow": "wrap", "accumulator_overflow": "reject",
+        "activation_overflow": "saturate", "accumulator_overflow": "reject",
     }
     for key, expected in rules.items():
         _require(type(network.get(key)) is type(expected) and network[key] == expected,
@@ -70,7 +70,8 @@ def quantize_input(values, bits):
 
 
 def requantize(accumulator, shift, bits):
-    return (np.maximum(accumulator, 0) >> shift) & ((1 << bits) - 1)
+    """ReLU, truncating shift, then saturate to the unsigned width (like hardware Activation.scala)."""
+    return np.minimum(np.maximum(accumulator, 0) >> shift, (1 << bits) - 1)
 
 
 def infer(inputs, network):

@@ -60,13 +60,31 @@ object WeightLoader {
         math.round(x * scale).toInt.min(scale - 1)
     }
 
+    val TypicalSigmas = 3 // "typical" policy: how far above the mean sum a sum may reach before it clamps
+
     /**
-     * Smallest shift so the worst-case positive sum fits the activation width.
+     * Shift that brings a hidden layer's MAC sums into the unsigned activation range.
+     *   "worst"   (default): smallest shift so the worst-case positive sum fits, so nothing ever clamps.
+     *   "typical": smallest shift so a typical sum fits; larger sums clamp (OVF_COUNT counts them).
+     *              Estimated from the weights only, inputs assumed uniform over 0..actMax:
+     *              typical_j = actMax/2 * sum(w) + b + TypicalSigmas * actMax/sqrt(12) * sqrt(sum(w^2)).
+     * The typical policy keeps 2-3 more bits of precision; which one is more accurate is measured
+     * with `make reference SHIFT_POLICY=...`.
      */
     def activationShift(weights: Seq[Seq[Int]], bias: Seq[Int], config: QuantizationConfig = QuantizationConfig()): Int = {
         val actMax = config.activationMax
-        val maxSum = bias.indices.map(j => BigInt(actMax) * weights.map(row => BigInt(row(j).max(0))).sum + bias(j)).max
-        (0 until 63).find(s => (maxSum >> s) <= actMax).getOrElse(
+        val fits: Int => Boolean = config.shiftPolicy match {
+            case "worst" =>
+                val maxSum = bias.indices.map(j => BigInt(actMax) * weights.map(row => BigInt(row(j).max(0))).sum + bias(j)).max
+                s => (maxSum >> s) <= actMax
+            case "typical" =>
+                val typical = bias.indices.map { j =>
+                    val col = weights.map(_(j).toDouble)
+                    actMax / 2.0 * col.sum + bias(j) + TypicalSigmas * actMax / math.sqrt(12) * math.sqrt(col.map(w => w * w).sum)
+                }.max
+                s => typical / math.pow(2, s) <= actMax
+        }
+        (0 until 63).find(fits).getOrElse(
             throw new IllegalArgumentException("Activation shift exceeds the reference arithmetic width"))
     }
 

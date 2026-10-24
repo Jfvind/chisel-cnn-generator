@@ -37,6 +37,8 @@ HOST     ?= pynq-direct,pynq
 WEIGHT_BITS     ?= 8
 ACTIVATION_BITS ?= 8
 BIAS_BITS       ?= 32
+SHIFT_POLICY    ?= worst
+WEIGHTS         ?= python/models/csv
 
 # --- Tools (windows detection) ---
 ifeq ($(OS),Windows_NT)
@@ -58,10 +60,13 @@ RTL_DIR := $(BUILD)/rtl
 OVERLAY := $(BUILD)/overlay/$(NAME).bit
 
 GEN_ARGS = --out ../$(RTL_DIR) --core $(CORE) --nIn $(N_IN) --nOut $(N_OUT) \
-           --streamW $(STREAM_W) --fclkMhz $(FCLK_MHZ)
+           --streamW $(STREAM_W) --fclkMhz $(FCLK_MHZ) \
+           --weightBiasDir ../$(WEIGHTS) --weightBits $(WEIGHT_BITS) --actBits $(ACTIVATION_BITS) \
+           --shiftPolicy $(SHIFT_POLICY)
 VIVADO_ARGS = -mode batch -nojournal -log $(BUILD)/vivado.log \
               -source hw/scripts/build.tcl -tclargs $(RTL_DIR) $(BUILD) $(NAME) $(JOBS) 0
-EXPORT_ARGS = --weight-bits $(WEIGHT_BITS) --activation-bits $(ACTIVATION_BITS) --bias-bits $(BIAS_BITS)
+EXPORT_ARGS = --weight-bits $(WEIGHT_BITS) --activation-bits $(ACTIVATION_BITS) --bias-bits $(BIAS_BITS) \
+              --shift-policy $(SHIFT_POLICY) --input ../$(WEIGHTS)
 
 DEPLOY = $(PYTHON) hw/scripts/deploy.py --overlay $(OVERLAY) --host $(HOST) --run=$(RUN)
 
@@ -70,7 +75,7 @@ DEPLOY = $(PYTHON) hw/scripts/deploy.py --overlay $(OVERLAY) --host $(HOST) --ru
 help:
 	@echo Targets: test, reference, reference-test, rtl, bitstream, deploy, board, clean
 	@echo Config:  CORE=$(CORE) STREAM_W=$(STREAM_W) N_IN=$(N_IN) N_OUT=$(N_OUT) FCLK_MHZ=$(FCLK_MHZ) RUN=$(RUN)
-	@echo Quant:   WEIGHT_BITS=$(WEIGHT_BITS) ACTIVATION_BITS=$(ACTIVATION_BITS) BIAS_BITS=$(BIAS_BITS)
+	@echo Quant:   WEIGHT_BITS=$(WEIGHT_BITS) ACTIVATION_BITS=$(ACTIVATION_BITS) BIAS_BITS=$(BIAS_BITS) SHIFT_POLICY=$(SHIFT_POLICY) WEIGHTS=$(WEIGHTS)
 	@echo Tools:   VIVADO=$(VIVADO) SBT=$(SBT) PYTHON=$(PYTHON)
 
 test:

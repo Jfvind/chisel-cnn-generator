@@ -34,21 +34,26 @@ For weight scale `W = 2^(weightBits-1)` and unsigned activation maximum
    `min(round(w * W), W-1)`. Parameter ties round toward positive infinity.
 3. Bias is `round(b * activationScale * W)`, where the first activation scale
    is `A`. CSV matrices are `[input][output]`.
-4. Scala picks the smallest nonnegative shift that makes the worst-case positive
-   sum fit `[0,A]`. After the hidden layer, the activation scale becomes
-   `activationScale * W / 2^shift`.
-5. Hidden layers perform ReLU, truncating right shift, and keep the lowest
-   `activationBits` bits. This is wrapping bit extraction, **not saturation**.
-   The shift is chosen to avoid wrapping for valid exported parameters.
+4. Scala picks each hidden layer's shift by `shiftPolicy` (`--shift-policy`,
+   recorded as `shift_policy` in `network.json`):
+   - `worst` (default): smallest shift that makes the worst-case positive sum
+     fit `[0,A]`, so no activation ever saturates.
+   - `typical`: smallest shift that makes a typical sum fit (mean + 3 std,
+     inputs assumed uniform over `[0,A]`); keeps more precision, larger sums
+     saturate. The hardware counts them in `OVF_COUNT`.
+   After the hidden layer, the activation scale becomes `activationScale * W / 2^shift`.
+5. Hidden layers perform ReLU, truncating right shift, then **saturate** to
+   `[0,A]` (`min(max(acc,0) >> shift, A)`), exactly like the hardware
+   `Activation` module. With the `worst` policy saturation never triggers.
 6. The final layer is identity: keep the wide signed MAC scores without ReLU
    or shift. Its exported shift is unused. Argmax ties select the lowest index.
 7. Export checks `A * sum(abs(weights)) + abs(bias)` for each neuron. Inference
    uses int64 temporaries and rejects values outside the exported MAC range.
 
 `network.json` records these policies explicitly. Python rejects unsupported
-versions/policies rather than silently substituting 8-bit or saturating rules.
-New rounding or saturation policies need matching generator, reference and tests;
-they are not selectable in this change.
+versions/policies (for example `"activation_overflow": "wrap"`) rather than
+silently substituting other rules. New rounding or overflow policies need
+matching generator, hardware, reference and tests.
 
 ## Repeat the pipeline
 

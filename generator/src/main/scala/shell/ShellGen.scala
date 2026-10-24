@@ -14,6 +14,7 @@ import circt.stage.ChiselStage      // For Verilog
 //   hw_manifest.json   values the PYNQ driver needs (register map, sizes, id, hash)
 //
 // ShellGen : App entry point, parses --out --core --nIn --nOut --streamW --addrW --fclkMhz
+//            (mlp also: --weightBiasDir --weightBits --actBits --shiftPolicy)
 // Wrapper  : port list + Verilog wrapper text
 // Manifest : shell_params.tcl and hw_manifest.json text
 //
@@ -34,7 +35,11 @@ object ShellGen extends App {           // App provides args from CLI
         nOut    = argOr("nOut", "10").toInt,
         streamW = argOr("streamW", "32").toInt,
         addrW   = argOr("addrW", "12").toInt,
-        fclkMhz = argOr("fclkMhz", "100").toInt
+        fclkMhz = argOr("fclkMhz", "100").toInt,
+        weightBiasDir = argOr("weightBiasDir", "../python/models/csv"),
+        weightBits    = argOr("weightBits", "8").toInt,
+        actBits       = argOr("actBits", "8").toInt,
+        shiftPolicy   = argOr("shiftPolicy", "worst")
     )
     val cfg = AccelConfig.resolve(requested)       // core-specific rules (stub: nOut = nIn)
     if (cfg != requested) println(s"[ShellGen] adjusted for core '${cfg.core}': $requested -> $cfg")
@@ -50,6 +55,9 @@ object ShellGen extends App {           // App provides args from CLI
             "--lowering-options=disallowLocalVariables,disallowPackedArrays"
         )
     )
+    // firtool guards memory init ($readmemh of the mlp weight banks) with this macro; without it BRAMs synthesize empty
+    val sv = new File(outDir, "AccelShell.sv")
+    write(sv, "`define ENABLE_INITIAL_MEM_\n" + java.nio.file.Files.readString(sv.toPath))
 
     write(new File(outDir, "accel_top.v"), Wrapper.verilog(cfg))
     write(new File(outDir, "shell_params.tcl"), Manifest.tcl(cfg))

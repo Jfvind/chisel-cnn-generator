@@ -8,7 +8,8 @@
   "activation_signed": false,
   "parameter_rounding": "nearest_ties_positive",
   "shift_rounding": "truncate",
-  "activation_overflow": "wrap",
+  "activation_overflow": "saturate",
+  "shift_policy": "worst",
   "accumulator_overflow": "reject",
   "layers": [
     {"index":0,"in_features":784,"out_features":128,"accumulator_bits":26,"multiplier":1,"shift":13,"activation":"relu"},

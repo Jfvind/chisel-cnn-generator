@@ -31,7 +31,8 @@ object WeightExporter {
   "activation_signed": false,
   "parameter_rounding": "nearest_ties_positive",
   "shift_rounding": "truncate",
-  "activation_overflow": "wrap",
+  "activation_overflow": "saturate",
+  "shift_policy": "${config.shiftPolicy}",
   "accumulator_overflow": "reject",
   "layers": [
 ${layers.mkString(",\n")}
@@ -50,14 +51,15 @@ ${layers.mkString(",\n")}
     }
 
     def main(args: Array[String]): Unit = {
-        val allowed = Set("--input", "--output", "--weight-bits", "--activation-bits", "--bias-bits")
-        require(args.length % 2 == 0 && args.grouped(2).forall(pair => allowed(pair(0))), "Expected --input/--output/--weight-bits/--activation-bits/--bias-bits value pairs")
+        val allowed = Set("--input", "--output", "--weight-bits", "--activation-bits", "--bias-bits", "--shift-policy")
+        require(args.length % 2 == 0 && args.grouped(2).forall(pair => allowed(pair(0))), "Expected --input/--output/--weight-bits/--activation-bits/--bias-bits/--shift-policy value pairs")
         val options = args.grouped(2).map(pair => pair(0) -> pair(1)).toMap
         require(options.size * 2 == args.length, "Duplicate exporter option")
         val config = QuantizationConfig(
             options.getOrElse("--weight-bits", "8").toInt,
             options.getOrElse("--activation-bits", "8").toInt,
-            options.getOrElse("--bias-bits", "32").toInt)
+            options.getOrElse("--bias-bits", "32").toInt,
+            options.getOrElse("--shift-policy", "worst"))
         val network = WeightLoader.load(options.getOrElse("--input", "../python/models/csv"), config)
         write(network, options.getOrElse("--output", "generated/quantized"))
         println(s"$config\n$network")
