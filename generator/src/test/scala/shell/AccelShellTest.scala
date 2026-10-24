@@ -213,8 +213,9 @@ class AccelShellTest extends AnyFlatSpec with ChiselScalatestTester {
     it should "resolve the stub config so the manifest has nOut = nIn" in {
         val r = AccelConfig.resolve(AccelConfig(core = "stub", nIn = 784, nOut = 10))
         assert(r.nOut == 784 && r.nIn == 784)
-        val other = AccelConfig(core = "mlp", nIn = 784, nOut = 10)
-        assert(AccelConfig.resolve(other) == other, "other cores are left unchanged")
+        // mlp has its own rule (sizes + weight hash from the network), tested in MlpCoreTest
+        val other = AccelConfig(core = "cnn", nIn = 784, nOut = 10)
+        assert(AccelConfig.resolve(other) == other, "cores without a rule are left unchanged")
     }
 
     it should "emit Verilog with the port names Vivado infers interfaces from" in {
