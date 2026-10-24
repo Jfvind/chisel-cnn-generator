@@ -88,3 +88,9 @@ generator/project/metals.sbt
 .gitignore
 .gitignore
 generator/project/project/metals.sbt
+
+# Local Python environments and generated width sweeps
+.venv/
+__pycache__/
+*.pyc
+generator/generated/reference-*/

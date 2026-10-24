@@ -1,0 +1,2 @@
+float_accuracy_percent,quantized_accuracy_percent,test_samples,weight_bits,activation_bits,bias_bits
+96.61,96.69,10000,8,8,32

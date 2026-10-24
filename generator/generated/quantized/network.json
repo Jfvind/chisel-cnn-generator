@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "input_bits": 8,
+  "activation_bits": 8,
+  "weight_bits": 8,
+  "bias_bits": 32,
+  "weight_signed": true,
+  "activation_signed": false,
+  "parameter_rounding": "nearest_ties_positive",
+  "shift_rounding": "truncate",
+  "activation_overflow": "wrap",
+  "accumulator_overflow": "reject",
+  "layers": [
+    {"index":0,"in_features":784,"out_features":128,"accumulator_bits":26,"multiplier":1,"shift":13,"activation":"relu"},
+    {"index":2,"in_features":128,"out_features":10,"accumulator_bits":23,"multiplier":1,"shift":11,"activation":"identity"}
+  ]
+}
