@@ -98,3 +98,8 @@ generator/generated/reference-*/
 # MlpCore weight-bank hex files (written at elaboration). Only these: generated/quantized is committed.
 generator/generated/mlp-*/
 .archify
+
+
+
+
+venv/

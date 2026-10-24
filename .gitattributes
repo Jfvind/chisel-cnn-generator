@@ -16,3 +16,7 @@ Makefile  text eol=lf
 *.png     binary
 *.pt      binary
 *.bit     binary
+
+
+generator/generated/** text eol=lf
+python/results/*.csv text eol=lf
