@@ -30,12 +30,12 @@ import shell.{AccelConfig, AccelCore}
 //   row layerBase(l) + i = w_l[i][n],  layerBase(l) = sum of inFeatures of the layers before l,
 //   0 when lane n is unused in layer l. MNIST 784 -> 128 -> 10: 912 rows x 8 bits per lane.
 //
-// Pipeline: bank reads take 1 cycle, so the input is registered once (pipeline register) to meet
-// its weight; the MACs accumulate the cycle after the read is issued.
+// Pipeline: bank read (1 cycle) + bank output register (1 cycle), the input is registered twice to meet
+// its weight; the MACs accumulate two cycles after the read is issued.
 //
 // Cycles at full speed (stream never stalls): first s_axis beat at cycle 0, last m_axis beat at
-// cycle  sum_l (in_l + 2) + nOut - 1   (in_l reads, 1 cycle for the last MAC, 1 finish cycle per layer).
-// MNIST: (784 + 2) + (128 + 2) + 10 - 1 = 925.
+// cycle  sum_l (in_l + 4) + nOut - 1   (in_l reads, 2 cycles to the last MAC, sum + finish per layer).
+// MNIST: (784 + 4) + (128 + 4) + 10 - 1 = 929.
 // =============================================================================
 
 class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
@@ -81,7 +81,8 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     }
 
     // --- Control state ---
-    object State extends ChiselEnum { val run, finish, output = Value }
+    // run -> sum (acc + bias into registers) -> finish (activation or logits) -> run / output
+    object State extends ChiselEnum { val run, sum, finish, output = Value }
     val state   = RegInit(State.run)
     val layer   = RegInit(0.U(log2Ceil(layers.length max 2).W))
     val i       = RegInit(0.U(log2Ceil(maxIn max N max 2).W))  // input index within the layer
@@ -90,6 +91,7 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
 
     val act    = Reg(Vec(N, UInt(Bits.W)))                      // activation registers (hidden layers)
     val logits = Reg(Vec(cfg.nOut, SInt(accW.W)))               // logit registers (last layer)
+    val sumReg = Reg(Vec(N, SInt(accW.W)))                      // pipeline: acc + bias is one cycle before activation
     val result = RegInit(0.U(32.W))
 
     val inLast    = pick(layers.map(l => (l.inFeatures - 1).U), layer)
@@ -113,54 +115,70 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
 
     // --- MAC column, one cycle behind the issue (bank read latency) ---
     val macs = Module(new MacArray(Bits, N, accW))
-    for (n <- 0 until N) macs.io.w(n) := banks(n).read(base + i, issue).asSInt
-    macs.io.a     := RegNext(a)                                 // pipeline register
-    macs.io.en    := RegNext(issue, false.B)
+    for (n <- 0 until N) macs.io.w(n) := RegNext(banks(n).read(base + i, issue).asSInt) // Critical path fix: adding register after read from SyncReadMem
+    macs.io.a     := RegNext(RegNext(a))                                 // pipeline register
+    macs.io.en    := RegNext(RegNext(issue, false.B), false.B)
     macs.io.clear := false.B
-    when(RegNext(issue && i === inLast, false.B)) { state := State.finish }   // last product is in acc now
+    when(RegNext(RegNext(issue && i === inLast, false.B), false.B)) { state := State.sum }   // last product is in acc now
 
-    // --- End of layer: bias, then activation (hidden) or raw logits (last layer) ---
-    val sums = Seq.tabulate(N) { n =>
-        val bias = pick(layers.map(l => (if (n < l.outFeatures) l.bias(n) else 0).S(accW.W)), layer)
-        macs.io.acc(n) + bias
+    // --- sum: acc + bias into registers, activation path gets shorter ---
+    when(state === State.sum) {
+        for (n <- 0 until N) {
+            val bias = pick(layers.map(l => (if (n < l.outFeatures) l.bias(n) else 0).S(accW.W)), layer)
+            sumReg(n) := macs.io.acc(n) + bias
+        }
+        macs.io.clear := true.B
+        drained       := false.B
+        state         := State.finish
     }
-    val units = sums.map { s =>
+
+    // --- End of layer: activation from registered sum (hidden) or raw logits (last layer) ---
+    val units = sumReg.map { s =>
         val u = Module(new Activation(Bits, maxIn))
         u.io.sum   := s
         u.io.shift := shift
         u
     }
-    val acts = units.map(_.io.act)
 
     // OVF_COUNT: saturated hidden activations since the last CTRL start (unused lanes have sum 0, never clamp)
     val ovf = RegInit(0.U(32.W))
+    val ovfFlags = RegNext(VecInit(units.map(_.io.clamped)))
+    val ovfValid = RegNext(state === State.finish && !lastLayer, false.B)
+    val ovfInc   = RegNext(PopCount(ovfFlags))
+    val ovfAdd   = RegNext(ovfValid, false.B)
     when(io.start) {
         ovf := 0.U
-    }.elsewhen(state === State.finish && !lastLayer) {
-        ovf := ovf + PopCount(units.map(_.io.clamped))
+    }.elsewhen(ovfAdd) {
+        ovf := ovf + ovfInc
     }
 
     when(state === State.finish) {
-        macs.io.clear := true.B
-        drained       := false.B
         when(lastLayer) {
-            for (k <- 0 until cfg.nOut) logits(k) := sums(k)
-            result := argmax(sums.take(cfg.nOut))
+            for (k <- 0 until cfg.nOut) logits(k) := sumReg(k)
             state  := State.output
         }.otherwise {
-            for (n <- 0 until N) act(n) := acts(n)
+            for (n <- 0 until N) act(n) := units(n).io.act
             layer := layer + 1.U
             state := State.run
         }
     }
 
     // --- Output: nOut logits, TLAST on the last one ---
+    val cur      = pick(logits, o)
+    val bestVal  = Reg(SInt(accW.W))
+    val bestIdx  = Reg(UInt(32.W))
+    val isBetter = o === 0.U || cur > bestVal           // Only greater. lowest index wins ties
     io.out.valid     := state === State.output
-    io.out.bits.data := saturate(pick(logits, o))
+    io.out.bits.data := saturate(cur)
     io.out.bits.last := o === (cfg.nOut - 1).U
     when(io.out.fire) {
+        when(isBetter) { bestVal := cur; bestIdx := o }
         o := Mux(io.out.bits.last, 0.U, o + 1.U)
-        when(io.out.bits.last) { state := State.run; layer := 0.U }  // ready for the next input
+        when(io.out.bits.last) { 
+            result := Mux(isBetter, o, bestIdx)     // RESULT valid the cycle after done
+            state  := State.run
+            layer  := 0.U                           // ready for the next input 
+        }
     }
 
     io.done   := io.out.fire && io.out.bits.last
@@ -170,12 +188,6 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
 
     // xs(idx) for a per-layer (or per-beat) constant; a one-element Vec takes no index bits
     def pick[T <: Data](xs: Seq[T], idx: UInt): T = if (xs.length == 1) xs.head else VecInit(xs)(idx)
-
-    // Index of the largest value, first one wins on a tie (like torch.argmax)
-    def argmax(xs: Seq[SInt]): UInt = xs.zipWithIndex.map { case (x, k) => (x, k.U(32.W)) }.reduceLeft { (best, next) =>
-        val take = next._1 > best._1
-        (Mux(take, next._1, best._1), Mux(take, next._2, best._2))
-    }._2
 
     // Two's complement in streamW bits, clamped when the logit does not fit
     def saturate(s: SInt): UInt = {
