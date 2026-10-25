@@ -1,6 +1,6 @@
 {
-  "frozen": "2026-10-25T17:38:03",
-  "commit": "6fe9885",
+  "frozen": "2026-10-25T17:50:00",
+  "commit": "3cc1d87",
   "build": "hw\\vivado\\demo",
   "cfg_hash": 2225125174,
   "images": 10000,
@@ -19,6 +19,7 @@
     "quant/network.json",
     "quant/test_inputs.csv",
     "reports/board_results.json",
+    "reports/cpu_benchmark.json",
     "reports/timing_summary.rpt",
     "reports/utilization.rpt",
     "reports/utilization_hier.rpt",
