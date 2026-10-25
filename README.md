@@ -47,9 +47,45 @@ See [`hw/README.md`](hw/README.md) for building and running on the PYNQ-Z2, and
 [`generator/src/main/scala/shell/README.md`](generator/src/main/scala/shell/README.md) for how the AXI shell is put together.
 
 ```
-make test      # all Chisel tests
-make board     # Chisel -> Vivado bitstream -> PYNQ-Z2 smoke test
+make test             # all Chisel tests
+make board            # Chisel -> Vivado bitstream -> PYNQ-Z2 smoke test (stub core)
+make board CORE=mlp   # the MLP: bit-exactness, accuracy and speed on the board
+make report OPEN=1    # dashboard: timing, resources, Python vs hardware
 ```
+
+# Demo: MNIST digits on the PYNQ-Z2
+
+The MLP (784 -> 128 -> 10, 8 bit) is the project's reference demo. It stays runnable when the
+default core changes (e.g. to the CNN).
+
+```bash
+make demo          # frozen, verified MLP overlay in demo/mlp/ -> board (no Vivado, ~1 min)
+make demo-build    # rebuild the MLP from the current source (own build dir) and run the same demo
+```
+
+The demo (`pynq/mlp_test.py`) prints a few test digits as ASCII art with the FPGA's answer, checks
+every score bit-exactly against the Python reference and the same integer network on the board's
+ARM CPU, and reports accuracy, CYCLES and time per image.
+
+**Why two targets:** `demo` uses a frozen bitstream plus the exact quantized export it was built from,
+so it does not depend on the current generator code. `demo-build` proves the MLP still builds from
+source; CI also elaborates the MNIST MLP, so CNN work cannot silently break it.
+
+**Updating the frozen demo:** `make demo-build`; if it ends with `ALL PASSED`, `make demo-freeze`
+(refuses unless that board run passed), then commit `demo/mlp/` and tag it (`git tag mlp-demo-v1`).
+
+# Evaluation: Python vs hardware
+
+```bash
+make cpu-bench                   # PyTorch float + NumPy integer on this PC -> python/results/cpu_benchmark.json
+make board CORE=mlp              # FPGA + the same integer network on the board's ARM -> reports/board_results.json
+make report OPEN=1               # one page: timing, resources, accuracy and time per image side by side
+make compare BUILDS="hw/vivado/mlp-worst hw/vivado/mlp-typical"   # configurations next to each other
+```
+
+The quantized export in `generator/generated/quantized/` must come from the same settings as the
+bitstream: run `make reference` with the same `WEIGHT_BITS` / `ACTIVATION_BITS` / `SHIFT_POLICY`
+before `make board CORE=mlp`, otherwise `mlp_test.py` reports that the export and overlay differ.
 
 # File overview
 
@@ -106,7 +142,9 @@ make board     # Chisel -> Vivado bitstream -> PYNQ-Z2 smoke test
 |---|---|
 | `README.md` | Prerequisites, board setup, how to build and run, register map. |
 | `scripts/build.tcl` | Vivado batch script: block design (PS + DMA + accel), synthesis, implementation, timing check, export of `.bit`/`.hwh`. |
-| `scripts/deploy.py` | Copies the overlay and driver to the board over SSH and runs the smoke test there. |
+| `scripts/deploy.py` | Copies the overlay, driver and data files to the board over SSH, runs a test script there and copies `board_results.json` back to `reports/`. |
+| `scripts/report.py` | Vivado reports + board/CPU results -> one HTML dashboard (`make report`, `make compare`). |
+| `scripts/freeze_demo.py` | Copies a verified MLP build into `demo/mlp/` for `make demo`. |
 | `boards/TUL/pynq-z2/` | PYNQ-Z2 board files (from Xilinx/XilinxBoardStore) so Vivado knows the board's DDR/clock setup. |
 | `vivado/` *(generated, git-ignored)* | `rtl/` from ShellGen, Vivado `project/`, `reports/`, and the finished `overlay/`. |
 
@@ -115,3 +153,4 @@ make board     # Chisel -> Vivado bitstream -> PYNQ-Z2 smoke test
 |---|---|
 | `accel.py` | Generic driver: loads the overlay, checks ID/hash, register access, one packet through the DMA. |
 | `smoke_test.py` | Board test: ID/config, the AXI-Lite adder, and DMA streams through the stub; prints PASS/FAIL. |
+| `mlp_test.py` | MLP on the board: Python vectors bit-exact, 10,000 MNIST images vs the ARM CPU (accuracy, CYCLES, time), `--demo N` ASCII digits; writes `board_results.json`. |
