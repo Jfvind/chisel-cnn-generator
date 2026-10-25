@@ -1,0 +1,24 @@
+{
+  "core": "mlp",
+  "id": 3735928559,
+  "cfg_hash": 2225125174,
+  "n_in": 784,
+  "n_out": 10,
+  "stream_w": 32,
+  "addr_w": 12,
+  "fclk_mhz": 100,
+  "num_args": 4,
+  "regs": {
+ "CTRL": 0,
+ "STATUS": 4,
+ "ID": 8,
+ "CFG_HASH": 12,
+ "N_IN": 16,
+ "N_OUT": 20,
+ "CYCLES": 24,
+ "OVF_COUNT": 28,
+ "RESULT": 32,
+ "ARG0": 64,
+ "SUM": 80
+  }
+}
