@@ -146,11 +146,11 @@ demo-build:
 # After demo-build passed: freeze its overlay, reports and the matching export into demo/mlp, then commit demo/mlp
 demo-freeze:
 	$(PYTHON) hw/scripts/freeze_demo.py --build $(DEMO_BUILD) --quant $(QUANT_DIR) --out $(DEMO_DIR) --name $(NAME)
-	$(PYTHON) hw/scripts/report.py $(DEMO_DIR)
+	$(PYTHON) hw/scripts/report.py $(DEMO_DIR) --cpu $(DEMO_DIR)/reports/cpu_benchmark.json
 
-# The frozen demo's dashboard (timing, resources, 10,000-image board results)
+# The frozen demo's dashboard (timing, resources, 10,000-image board results, frozen PC benchmark)
 demo-report:
-	$(PYTHON) hw/scripts/report.py $(DEMO_DIR) --open
+	$(PYTHON) hw/scripts/report.py $(DEMO_DIR) --cpu $(DEMO_DIR)/reports/cpu_benchmark.json --open
 
 clean:
 	rm -rf $(BUILD)

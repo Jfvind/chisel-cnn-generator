@@ -49,6 +49,9 @@ def main():
     files += [(f, "quant") for f in sorted(quant.glob("*.csv"))]
     files += [(f, "reports") for f in sorted((build / "reports").glob("*.rpt"))]
     files += [(results, "reports")]
+    cpu = pathlib.Path("python/results/cpu_benchmark.json")       # PC numbers next to the board numbers
+    if cpu.exists():
+        files += [(cpu, "reports")]
     missing = [str(f) for f, _ in files if not f.exists()]
     if missing:
         sys.exit("missing: " + ", ".join(missing))
