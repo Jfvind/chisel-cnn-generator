@@ -5,18 +5,21 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import scala.util.Random
 
-import model.{LayerParams, NetworkModel}
+import model.{LayerParams, NetworkModel, QuantizationConfig}
 import service.WeightLoader
 import shell.AccelConfig
 
 class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
     behavior of "MlpCore"
 
+    // Largest activaiton for the network's width: 255 at 8 bit, 63 at 6 bit, 15 at 4 bit
+    def actMax(net: NetworkModel): Long = (1L << net.quantization.activationBits) - 1
+
     // Software model: hidden layers ReLU -> >> shift -> clamp 255, last layer raw sum
     def reference(net: NetworkModel, x: Seq[Int]): Seq[Long] =
         net.layers.zipWithIndex.foldLeft(x.map(_.toLong)) { case (in, (l, k)) =>
             val sums = (0 until l.outFeatures).map(j => in.zip(l.weights).map { case (a, row) => a * row(j) }.sum + l.bias(j))
-            if (k == net.layers.length - 1) sums else sums.map(s => math.min(math.max(s, 0L) >> l.shift, 255L))
+            if (k == net.layers.length - 1) sums else sums.map(s => math.min(math.max(s, 0L) >> l.shift, actMax(net)))
         }
 
     // Hidden activations that saturate (what OVF_COUNT must report for one input)
@@ -24,13 +27,20 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
         net.layers.init.foldLeft((x.map(_.toLong), 0)) { case ((in, n), l) =>
             val shifted = (0 until l.outFeatures).map(j =>
                 math.max(in.zip(l.weights).map { case (a, row) => a * row(j) }.sum + l.bias(j), 0L) >> l.shift)
-            (shifted.map(math.min(_, 255L)), n + shifted.count(_ > 255L))
+            (shifted.map(math.min(_, actMax(net))), n + shifted.count(_ > actMax(net)))
         }._2
+
+    // The core clamps every score to the stream width before it sends it (MlpCore.saturate)
+    def saturate (xs: Seq[Long], streamW: Int): Seq[Long] = {
+        val hi = (1L << (streamW - 1)) - 1
+        val lo = -(1L << (streamW - 1))
+        xs.map(v => math.min(math.max(v, lo), hi))
+    }
 
     def argmax(xs: Seq[Long]): Int = xs.indexOf(xs.max)
 
-    def cfgFor(net: NetworkModel) =
-        AccelConfig(core = "mlp", nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures, streamW = 32)
+    def cfgFor(net: NetworkModel, streamW: Int = 32) =
+        AccelConfig(core = "mlp", nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures, streamW = streamW)
 
     // Fixed cycles at full speed: sum_l (in_l + 4) + nOut - 1 (see MlpCore header)
     def fullSpeedCycles(net: NetworkModel): Int = net.layers.map(_.inFeatures + 4).sum + net.layers.last.outFeatures - 1
@@ -38,7 +48,7 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
     case class Run(out: Seq[Long], lasts: Seq[Int], dones: Int, firstIn: Int, lastOut: Int)
 
     // One input vector in, nOut beats out. stall = Some(rnd): random VALID/READY, None: full speed.
-    def stream(dut: MlpCore, x: Seq[Int], nOut: Int, stall: Option[Random]): Run = {
+    def stream(dut: MlpCore, x: Seq[Int], nOut: Int, stall: Option[Random], streamW: Int = 32): Run = {
         val got = scala.collection.mutable.ArrayBuffer[Long]()
         val lasts = scala.collection.mutable.ArrayBuffer[Int]()
         var sent = 0; var holding = false; var cyc = 0; var dones = 0; var firstIn = -1; var lastOut = -1
@@ -53,7 +63,7 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
             if (ready && dut.io.out.valid.peek().litToBoolean) {
                 if (dut.io.out.bits.last.peek().litToBoolean) { lasts += got.length; lastOut = cyc }
                 val raw = dut.io.out.bits.data.peek().litValue
-                got += (if (raw >= (BigInt(1) << 31)) raw - (BigInt(1) << 32) else raw).toLong   // two's complement
+                got += (if (raw >= (BigInt(1) << (streamW - 1))) raw - (BigInt(1) << streamW) else raw).toLong   // two's complement
             }
             if (dut.io.done.peek().litToBoolean) dones += 1
             dut.clock.step()
@@ -66,11 +76,11 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
     }
 
     // Logits, TLAST, done, RESULT and idle after the input; at full speed also the documented cycle count
-    def checkImage(dut: MlpCore, net: NetworkModel, x: Seq[Int], stall: Option[Random]): Run = {
+    def checkImage(dut: MlpCore, net: NetworkModel, x: Seq[Int], stall: Option[Random], streamW: Int = 32): Run = {
         val want = reference(net, x)
         dut.io.start.poke(true.B); dut.clock.step(); dut.io.start.poke(false.B)   // CTRL start: clears OVF_COUNT
-        val r = stream(dut, x, want.length, stall)
-        assert(r.out == want, s"logits for input $x")
+        val r = stream(dut, x, want.length, stall, streamW)
+        assert(r.out == saturate(want, streamW), s"logits for input $x")
         assert(r.lasts == Seq(want.length - 1), s"TLAST must be on the last beat only, got ${r.lasts}")
         assert(r.dones == 1, "done must pulse once per input")
         dut.io.result.expect(argmax(want).U)
@@ -103,25 +113,28 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
         }
     }
 
-    // Random network of random shape: 1-3 layers, 1-16 neurons each.
-    // The shift is one below WeightLoader's choice so some activations clamp.
-    // Bias is random (up to +-10000) but capped so the worst-case sum fits MlpCore's accumulator,
-    // the same guarantee WeightExporter gives for real networks.
-    def randomNet(rnd: Random): NetworkModel = {
+    // Random network of random shape: 1-3 layers, 1-16 neurons each, 8 bit unless q says otherwise.
+    // Weights in [-2^(bits-1), 2^(bits-1) - 1]. The shift (from q's width and shift policy) is one below
+    // WeightLoader's choice so some activations clamp. Bias is random (up to +-10000) but capped so the
+    // worst-case sum fits MlpCore's accumulator, the same guarantee WeightExporter gives for real networks.
+    def randomNet(rnd: Random, q: QuantizationConfig = QuantizationConfig()): NetworkModel = {
+        val bits = q.weightBits                                   // 8, 6 or 4 (MlpCore needs the same width for activations)
+        val actMx = (1L << bits) - 1                              // largest activation: 255, 63 or 15
+        val vMax = 1 << (bits - 1)                                // weights lie in [-vMax, vMax - 1]: 128, 32 or 8
         val sizes = Seq.fill(rnd.nextInt(3) + 2)(rnd.nextInt(16) + 1)
-        val accW  = 16 + chisel3.util.log2Ceil(sizes.init.max)    // MlpCore: Bits * 2 + log2Ceil(maxIn), 8-bit
+        val accW  = 2 * bits + chisel3.util.log2Ceil(sizes.init.max)    // MlpCore: Bits * 2 + log2Ceil(maxIn)
         val lim   = (1L << (accW - 1)) - 1
         NetworkModel(sizes.zip(sizes.tail).zipWithIndex.map { case ((in, out), k) =>
-            val w = Seq.fill(in)(Seq.fill(out)(rnd.nextInt(256) - 128))
+            val w = Seq.fill(in)(Seq.fill(out)(rnd.nextInt(2 * vMax) - vMax))
             val b = (0 until out).map { j =>
-                val pos = 255L * w.map(_(j)).filter(_ > 0).sum     // largest sum without bias
-                val neg = 255L * w.map(_(j)).filter(_ < 0).sum     // smallest sum without bias
+                val pos = actMx * w.map(_(j)).filter(_ > 0).sum     // largest sum without bias
+                val neg = actMx * w.map(_(j)).filter(_ < 0).sum     // smallest sum without bias
                 val hi  = math.min(10000L, lim - pos)
                 val lo  = math.max(-10000L, -(lim + 1) - neg)
                 (lo + rnd.nextLong(hi - lo + 1)).toInt
             }
-            LayerParams(k, w, b, (WeightLoader.activationShift(w, b) - 1) max 0)
-        })
+            LayerParams(k, w, b, (WeightLoader.activationShift(w, b, q) - 1) max 0)
+        }, q)
     }
 
     // New seed every run; rerun a failure with: sbt -Dseed=<seed> "testOnly mlp.MlpCoreTest"
@@ -137,6 +150,24 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
                     def input() = Seq.fill(net.layers.head.inFeatures)(rnd.nextInt(256))
                     for (_ <- 0 until 6) checkImage(dut, net, input(), Some(rnd))  // random stalls, back to back
                     for (_ <- 0 until 2) checkImage(dut, net, input(), None)       // full speed: cycle count
+                }
+            }
+        }
+    }
+
+    it should s"match the reference model on random configurations (seed $seed)" in {
+        val rnd = new Random(seed)
+        for (_ <- 0 until 5) {
+            val bits    = Seq(4, 6, 8)(rnd.nextInt(3))
+            val policy  = Seq("worst", "typical")(rnd.nextInt(2))
+            val streamW = Seq(8, 16, 32)(rnd.nextInt(3))
+            val net   = randomNet(rnd, QuantizationConfig(bits, bits, shiftPolicy = policy))
+            val shape = (net.layers.head.inFeatures +: net.layers.map(_.outFeatures)).mkString(" -> ")
+            withClue(s"network $shape, $bits bit, shift policy $policy, streamW $streamW, seed $seed: ") {
+                test(new MlpCore(cfgFor(net, streamW), net)) { dut =>
+                    def input() = Seq.fill(net.layers.head.inFeatures)(rnd.nextInt(1 << bits))
+                    for (_ <- 0 until 6) checkImage(dut, net, input(), Some(rnd), streamW)  // random stalls, back to back
+                    for (_ <- 0 until 2) checkImage(dut, net, input(), None, streamW)       // full speed: cycle count
                 }
             }
         }
