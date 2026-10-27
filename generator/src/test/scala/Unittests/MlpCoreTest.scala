@@ -32,8 +32,8 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
     def cfgFor(net: NetworkModel) =
         AccelConfig(core = "mlp", nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures, streamW = 32)
 
-    // Fixed cycles at full speed: sum_l (in_l + 2) + nOut - 1 (see MlpCore header)
-    def fullSpeedCycles(net: NetworkModel): Int = net.layers.map(_.inFeatures + 2).sum + net.layers.last.outFeatures - 1
+    // Fixed cycles at full speed: sum_l (in_l + 4) + nOut - 1 (see MlpCore header)
+    def fullSpeedCycles(net: NetworkModel): Int = net.layers.map(_.inFeatures + 4).sum + net.layers.last.outFeatures - 1
 
     case class Run(out: Seq[Long], lasts: Seq[Int], dones: Int, firstIn: Int, lastOut: Int)
 
@@ -105,11 +105,21 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
 
     // Random network of random shape: 1-3 layers, 1-16 neurons each.
     // The shift is one below WeightLoader's choice so some activations clamp.
+    // Bias is random (up to +-10000) but capped so the worst-case sum fits MlpCore's accumulator,
+    // the same guarantee WeightExporter gives for real networks.
     def randomNet(rnd: Random): NetworkModel = {
         val sizes = Seq.fill(rnd.nextInt(3) + 2)(rnd.nextInt(16) + 1)
+        val accW  = 16 + chisel3.util.log2Ceil(sizes.init.max)    // MlpCore: Bits * 2 + log2Ceil(maxIn), 8-bit
+        val lim   = (1L << (accW - 1)) - 1
         NetworkModel(sizes.zip(sizes.tail).zipWithIndex.map { case ((in, out), k) =>
             val w = Seq.fill(in)(Seq.fill(out)(rnd.nextInt(256) - 128))
-            val b = Seq.fill(out)(rnd.nextInt(20001) - 10000)
+            val b = (0 until out).map { j =>
+                val pos = 255L * w.map(_(j)).filter(_ > 0).sum     // largest sum without bias
+                val neg = 255L * w.map(_(j)).filter(_ < 0).sum     // smallest sum without bias
+                val hi  = math.min(10000L, lim - pos)
+                val lo  = math.max(-10000L, -(lim + 1) - neg)
+                (lo + rnd.nextLong(hi - lo + 1)).toInt
+            }
             LayerParams(k, w, b, (WeightLoader.activationShift(w, b) - 1) max 0)
         })
     }

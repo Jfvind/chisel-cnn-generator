@@ -1,0 +1,28 @@
+{
+  "frozen": "2026-10-25T17:50:00",
+  "commit": "3cc1d87",
+  "build": "hw\\vivado\\demo",
+  "cfg_hash": 2225125174,
+  "images": 10000,
+  "accuracy": 96.69,
+  "cycles": 929,
+  "shift_policy": "worst",
+  "files": [
+    "overlay/accel.bit",
+    "overlay/accel.hwh",
+    "overlay/hw_manifest.json",
+    "quant/0_bias.csv",
+    "quant/0_weight.csv",
+    "quant/2_bias.csv",
+    "quant/2_weight.csv",
+    "quant/expected_outputs.csv",
+    "quant/network.json",
+    "quant/test_inputs.csv",
+    "reports/board_results.json",
+    "reports/cpu_benchmark.json",
+    "reports/timing_summary.rpt",
+    "reports/utilization.rpt",
+    "reports/utilization_hier.rpt",
+    "rtl/shell_params.tcl"
+  ]
+}

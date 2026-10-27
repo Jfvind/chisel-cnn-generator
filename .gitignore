@@ -103,3 +103,8 @@ generator/generated/mlp-*/
 
 
 venv/
+
+# Frozen MLP demo: the one bitstream that is committed on purpose (make demo-freeze)
+!demo/mlp/overlay/*.bit
+demo/mlp/reports/demo_run.json
+demo/mlp/reports/dashboard.html
