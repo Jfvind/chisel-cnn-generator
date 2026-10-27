@@ -115,13 +115,13 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
 
     // --- MAC column, one cycle behind the issue (bank read latency) ---
     val macs = Module(new MacArray(Bits, N, accW))
-    for (n <- 0 until N) macs.io.w(n) := RegNext(banks(n).read(base + i, issue).asSInt) // Critical path fix: adding register after read from SyncReadMem
+    for (n <- 0 until N) macs.io.w(n) := RegNext(banks(n).read(base + i, issue).asSInt)
     macs.io.a     := RegNext(RegNext(a))                                 // pipeline register
     macs.io.en    := RegNext(RegNext(issue, false.B), false.B)
     macs.io.clear := false.B
     when(RegNext(RegNext(issue && i === inLast, false.B), false.B)) { state := State.sum }   // last product is in acc now
 
-    // --- sum: acc + bias into registers, activation path gets shorter ---
+    // --- sum: acc + bias into registers ---
     when(state === State.sum) {
         for (n <- 0 until N) {
             val bias = pick(layers.map(l => (if (n < l.outFeatures) l.bias(n) else 0).S(accW.W)), layer)
