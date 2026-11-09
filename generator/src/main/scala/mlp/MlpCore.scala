@@ -80,6 +80,15 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
         mem
     }
 
+    // --- Batching input images ---
+    val batch = RegInit(1.U(32.W))              // Images pr batch. Default: 1
+    val img   = RegInit(0.U(32.W))              // Image index in the batch
+    when (io.start) {
+        batch := Mux(io.args(0) === 0.U, 1.U, io.args(0))
+        img   := 0.U
+    }
+    val lastImage = img === batch - 1.U
+
     // --- Control state ---
     // run -> sum (acc + bias into registers) -> finish (activation or logits) -> run / output
     object State extends ChiselEnum { val run, sum, finish, output = Value }
@@ -99,14 +108,29 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val shift     = pick(layers.map(_.shift.U(log2Ceil(accW).W)), layer)
     val lastLayer = layer === (layers.length - 1).U
 
-    // --- Input mux + issue: layer 0 from the stream, later layers from the activation registers ---
+    // --- Input: ppb pixels per stream word (lowest bits = first pixel); later layers from the activation registers ---
+    val ppb        = (cfg.streamW / Bits) max 1                 // pixels per beat: 32 / 8 = 4
+    val word       = Reg(UInt(cfg.streamW.W))                   // the word being unpacked
+    val have       = RegInit(0.U(log2Ceil(ppb + 1).W))          // pixels left in `word`
     val fromStream = layer === 0.U
     val canIssue   = state === State.run && !drained
-    io.in.ready   := canIssue && fromStream
-    val issue      = canIssue && (!fromStream || io.in.valid)
+    val pixValid   = have =/= 0.U || io.in.valid
+    val pixel      = Mux(have =/= 0.U, word(Bits - 1, 0), io.in.bits.data(Bits - 1, 0))
+    io.in.ready   := canIssue && fromStream && have === 0.U      // fetch a new word only when the old one is used
+    val issue      = canIssue && (!fromStream || pixValid)
     val actIdx     = if (N == 1) 0.U else i(log2Ceil(N) - 1, 0)
-    val a          = Mux(fromStream, io.in.bits.data(Bits - 1, 0), act(actIdx))
-    // shortcut: s_axis TLAST is not checked, the beat count comes from the network; check it if packets can be malformed
+    val a          = Mux(fromStream, pixel, act(actIdx))
+
+    when(issue && fromStream) {
+        val endOfImage = i === inLast                            // the rest of a partly used word is padding
+        when(have === 0.U) {                                     // took pixel 0 straight from the stream
+            word := io.in.bits.data >> Bits
+            have := Mux(endOfImage, 0.U, (ppb - 1).U)
+        }.otherwise {
+            word := word >> Bits
+            have := Mux(endOfImage, 0.U, have - 1.U)
+        }
+    }
 
     when(issue) {
         i := Mux(i === inLast, 0.U, i + 1.U)
@@ -168,14 +192,16 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val bestVal  = Reg(SInt(accW.W))
     val bestIdx  = Reg(UInt(32.W))
     val isBetter = o === 0.U || cur > bestVal           // Only greater. lowest index wins ties
+    val lastBeat = o === (cfg.nOut - 1).U               // Last score of this image
     io.out.valid     := state === State.output
     io.out.bits.data := saturate(cur)
-    io.out.bits.last := o === (cfg.nOut - 1).U
+    io.out.bits.last := lastBeat && lastImage
     when(io.out.fire) {
         when(isBetter) { bestVal := cur; bestIdx := o }
-        o := Mux(io.out.bits.last, 0.U, o + 1.U)
-        when(io.out.bits.last) { 
+        o := Mux(lastBeat, 0.U, o + 1.U)
+        when(lastBeat) { 
             result := Mux(isBetter, o, bestIdx)     // RESULT valid the cycle after done
+            img    := Mux(lastImage, 0.U, img + 1.U)
             state  := State.run
             layer  := 0.U                           // ready for the next input 
         }

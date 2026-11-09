@@ -75,9 +75,12 @@ class Accel:
         and n_out comes from the manifest; pass n_out for any other packet length."""
         x = np.asarray(x)
         if n_out is None:
-            if x.size != self.manifest["n_in"]:
-                raise ValueError(f"packet has {x.size} values but the core expects n_in={self.manifest['n_in']}; "
-                                 f"pass n_out explicitly for other packet lengths")
+            ppb = self.manifest.get("pixels_per_beat", 1)          # input values packed per stream word
+            words = -(-self.manifest["n_in"] // ppb)               # one image in stream words, rounded up
+            if x.size != words:
+                raise ValueError(f"packet has {x.size} words but one input is {words} words "
+                                 f"(n_in={self.manifest['n_in']}, {ppb} per word); "
+                                 "pass n_out explicitly for other packet lengths")
             n_out = self.manifest["n_out"]
         ibuf, obuf = self._buf("in", x.size), self._buf("out", n_out)
         ibuf[:] = x.astype(self.dtype, copy=False).ravel()
