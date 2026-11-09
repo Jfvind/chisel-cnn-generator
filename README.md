@@ -87,6 +87,23 @@ The quantized export in `generator/generated/quantized/` must come from the same
 bitstream: run `make reference` with the same `WEIGHT_BITS` / `ACTIVATION_BITS` / `SHIFT_POLICY`
 before `make board CORE=mlp`, otherwise `mlp_test.py` reports that the export and overlay differ.
 
+## Choosing batchsize
+```powershell
+foreach ($b in 1, 10, 100, 1000, 2000) {
+    make deploy CORE=mlp ARGS="--batch $b --images 2000 --latency-images 1 --arm-single 1"
+    Copy-Item hw\vivado\reports\board_results.json hw\vivado\reports\batch_$b.json
+}
+```
+For MNIST MLP, 2000 images, packed 4 pixels/word
+| Batch | Time / image | Total (2,000 images) | Bit-exact |
+|---|---|---|---|
+| 1     |  2.13 ms | 4.26 s | 2000/2000 |
+| 10    |  0.22 ms | 0.45 s | 2000/2000 |
+| 100   |  0.038 ms | 0.076 s | 2000/2000 |
+| 1000  |  0.021 ms | 0.043 s | 2000/2000 |
+| 2000  |  0.022 ms | 0.044 s | 2000/2000 |
+
+
 # File overview
 
 ### Repository root
