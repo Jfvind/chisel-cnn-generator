@@ -17,8 +17,9 @@ import shell.{AccelConfig, AccelCore}
 // N = widest layer lanes. Lane n = weight bank n + Mac n + bias n + Activation n and computes
 // neuron n of whichever layer is running; the same lanes are reused for every layer.
 //
-// Per layer, one input per clock: input i is broadcast to all lanes, lane n reads w[i][n] from its
-// bank and accumulates a[i] * w[i][n]. Layer 0 takes its inputs straight from the stream (never
+// Per layer, K inputs per clock (K = 2 when a stream word holds an even number of pixels, else 1):
+// inputs Ki..Ki+K-1 are broadcast to all lanes, lane n reads their K weights from one bank row and
+// accumulates sum_j a[Ki+j] * w[Ki+j][n]. Layer 0 takes its inputs straight from the stream (never
 // stored), later layers read the activation registers written by the layer before.
 // End of a layer: hidden layer -> acc + bias -> ReLU, >> shift, clamp -> activation registers;
 // last layer -> raw acc + bias (no ReLU, like train_model.py) -> logit registers -> argmax -> RESULT,
@@ -27,15 +28,16 @@ import shell.{AccelConfig, AccelCore}
 // OVF_COUNT = hidden activations that saturated since the last CTRL start (0 with shift policy "worst").
 //
 // Weight bank layout (one SyncReadMem per lane, initialised from bank_<n>.hex at elaboration):
-//   row layerBase(l) + i = w_l[i][n],  layerBase(l) = sum of inFeatures of the layers before l,
-//   0 when lane n is unused in layer l. MNIST 784 -> 128 -> 10: 912 rows x 8 bits per lane.
+//   row layerBase(l) + i = w_l[Ki + j][n] in bits j*Bits, j < K,  layerBase(l) = sum of ceil(in/K)
+//   of the layers before l; 0 when lane n is unused in layer l or Ki + j is past the layer's inputs.
+//   MNIST 784 -> 128 -> 10, K = 2: 456 rows x 16 bits per lane.
 //
 // Pipeline: bank read (1 cycle) + bank output register (1 cycle), the input is registered twice to meet
 // its weight; the MACs accumulate two cycles after the read is issued.
 //
 // Cycles at full speed (stream never stalls): first s_axis beat at cycle 0, last m_axis beat at
-// cycle  sum_l (in_l + 4) + nOut - 1   (in_l reads, 2 cycles to the last MAC, sum + finish per layer).
-// MNIST: (784 + 4) + (128 + 4) + 10 - 1 = 929.
+// cycle  sum_l (ceil(in_l / K) + 4) + nOut - 1   (ceil(in_l / K) reads, 2 cycles to the last MAC,
+// sum + finish per layer). MNIST, K = 2: (392 + 4) + (64 + 4) + 10 - 1 = 473.
 // =============================================================================
 
 class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
@@ -48,6 +50,9 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val maxIn   = layers.map(_.inFeatures).max
     val accW    = Bits * 2 + log2Ceil(maxIn)         // same width as Activation(Bits, maxIn).sumMaxSize
     val actMax  = (1L << Bits) - 1
+    val ppb     = (cfg.streamW / Bits) max 1           // pixels per stream word: 32 / 8 = 4
+    val K       = if (ppb % 2 == 0) 2 else 1           // inputs per clock; must divide ppb so a group never spans two words
+    val groups  = layers.map(l => (l.inFeatures + K - 1) / K)   // bank rows (and clocks) per layer
 
     // --- Checks at elaboration ---
     require(layers.head.inFeatures == cfg.nIn, s"cfg.nIn ${cfg.nIn} != network input ${layers.head.inFeatures}")
@@ -64,17 +69,21 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     }
 
     // --- Weight banks, hardcoded from the network ---
-    val layerBase = layers.scanLeft(0)(_ + _.inFeatures)   // last element = total rows
+    val layerBase = groups.scanLeft(0)(_ + _)              // last element = total rows
     val depth     = layerBase.last
     val hexDir    = new File(f"generated/mlp-${net.hashCode}%08x").getAbsoluteFile   // absolute: Vivado's $readmemh must find it
     hexDir.mkdirs()
     val banks = Seq.tabulate(N) { n =>
-        val rows = layers.flatMap(l => l.weights.map(row => if (n < l.outFeatures) row(n) else 0))
+        val rows = layers.zip(groups).flatMap { case (l, g) =>
+            l.weights.map(row => if (n < l.outFeatures) row(n) else 0).padTo(g * K, 0).grouped(K)
+        }
         val file = new File(hexDir, s"bank_$n.hex")
-        val digits = (Bits + 3) / 4                  // two's complement in Bits bits: -2 @ 8 bit -> "fe"
-        Files.write(file.toPath, rows.map(w => String.format(s"%0${digits}x", Int.box(w & ((1 << Bits) - 1))))
-            .mkString("", "\n", "\n").getBytes)
-        val mem = SyncReadMem(depth, UInt(Bits.W))   // stored as raw bits; a SInt memory loads "fe" as 254 in treadle
+        val digits = (K * Bits + 3) / 4              // two's complement per weight: -2 @ 8 bit -> "fe"; weight j in bits j*Bits
+        Files.write(file.toPath, rows.map { r =>
+            val word = r.zipWithIndex.map { case (w, j) => BigInt(w & ((1 << Bits) - 1)) << (j * Bits) }.sum
+            String.format(s"%0${digits}x", word.bigInteger)
+        }.mkString("", "\n", "\n").getBytes)
+        val mem = SyncReadMem(depth, UInt((K * Bits).W))   // stored as raw bits; a SInt memory loads "fe" as 254 in treadle
         // forward slashes: a Windows path "C:\Users\..." inside a Verilog string would be read as escape sequences
         loadMemoryFromFileInline(mem, file.getAbsolutePath.replace('\\', '/'))
         mem
@@ -103,31 +112,34 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val sumReg = Reg(Vec(N, SInt(accW.W)))                      // pipeline: acc + bias is one cycle before activation
     val result = RegInit(0.U(32.W))
 
-    val inLast    = pick(layers.map(l => (l.inFeatures - 1).U), layer)
+    val inLast    = pick(groups.map(g => (g - 1).U), layer)
     val base      = pick(layerBase.init.map(_.U(log2Ceil(depth max 2).W)), layer)
     val shift     = pick(layers.map(_.shift.U(log2Ceil(accW).W)), layer)
     val lastLayer = layer === (layers.length - 1).U
 
-    // --- Input: ppb pixels per stream word (lowest bits = first pixel); later layers from the activation registers ---
-    val ppb        = (cfg.streamW / Bits) max 1                 // pixels per beat: 32 / 8 = 4
+    // --- Input: K pixels per clock from ppb per stream word (lowest bits = first pixel); later layers from the activation registers ---
+    val gpw        = ppb / K                                    // K-pixel groups per word: 4 / 2 = 2
     val word       = Reg(UInt(cfg.streamW.W))                   // the word being unpacked
-    val have       = RegInit(0.U(log2Ceil(ppb + 1).W))          // pixels left in `word`
+    val have       = RegInit(0.U(log2Ceil(gpw + 1).W))          // groups left in `word`
     val fromStream = layer === 0.U
     val canIssue   = state === State.run && !drained
     val pixValid   = have =/= 0.U || io.in.valid
-    val pixel      = Mux(have =/= 0.U, word(Bits - 1, 0), io.in.bits.data(Bits - 1, 0))
+    val grp        = Mux(have =/= 0.U, word, io.in.bits.data)
+    val pixels     = VecInit.tabulate(K)(j => grp(j * Bits + Bits - 1, j * Bits))
     io.in.ready   := canIssue && fromStream && have === 0.U      // fetch a new word only when the old one is used
     val issue      = canIssue && (!fromStream || pixValid)
-    val actIdx     = if (N == 1) 0.U else i(log2Ceil(N) - 1, 0)
-    val a          = Mux(fromStream, pixel, act(actIdx))
+    // act in groups of K; the tail is padded with 0 (its weights are 0 too)
+    val actGroups  = VecInit(act.padTo((N + K - 1) / K * K, 0.U(Bits.W)).grouped(K).map(g => VecInit(g.toSeq)).toSeq)
+    val actIdx     = if (actGroups.length == 1) 0.U else i(log2Ceil(actGroups.length) - 1, 0)
+    val a          = Mux(fromStream, pixels, actGroups(actIdx))
 
     when(issue && fromStream) {
         val endOfImage = i === inLast                            // the rest of a partly used word is padding
-        when(have === 0.U) {                                     // took pixel 0 straight from the stream
-            word := io.in.bits.data >> Bits
-            have := Mux(endOfImage, 0.U, (ppb - 1).U)
+        when(have === 0.U) {                                     // took group 0 straight from the stream
+            word := io.in.bits.data >> (K * Bits)
+            have := Mux(endOfImage, 0.U, (gpw - 1).U)
         }.otherwise {
-            word := word >> Bits
+            word := word >> (K * Bits)
             have := Mux(endOfImage, 0.U, have - 1.U)
         }
     }
@@ -138,8 +150,11 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     }
 
     // --- MAC column, one cycle behind the issue (bank read latency) ---
-    val macs = Module(new MacArray(Bits, N, accW))
-    for (n <- 0 until N) macs.io.w(n) := RegNext(banks(n).read(base + i, issue).asSInt)
+    val macs = Module(new MacArray(Bits, N, accW, K))
+    for (n <- 0 until N) {
+        val row = RegNext(banks(n).read(base + i, issue))
+        macs.io.w(n) := VecInit.tabulate(K)(j => row(j * Bits + Bits - 1, j * Bits).asSInt)
+    }
     macs.io.a     := RegNext(RegNext(a))                                 // pipeline register
     macs.io.en    := RegNext(RegNext(issue, false.B), false.B)
     macs.io.clear := false.B

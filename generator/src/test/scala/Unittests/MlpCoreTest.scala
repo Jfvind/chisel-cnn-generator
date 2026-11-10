@@ -38,8 +38,8 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
     def cfgFor(net: NetworkModel) =
         AccelConfig(core = "mlp", nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures, streamW = 32)
 
-    // Fixed cycles at full speed: sum_l (in_l + 4) + nOut - 1 (see MlpCore header)
-    def fullSpeedCycles(net: NetworkModel): Int = net.layers.map(_.inFeatures + 4).sum + net.layers.last.outFeatures - 1
+    // Fixed cycles at full speed: sum_l (ceil(in_l / 2) + 4) + nOut - 1 (see MlpCore header; 32-bit stream -> K = 2)
+    def fullSpeedCycles(net: NetworkModel): Int = net.layers.map(l => (l.inFeatures + 1) / 2 + 4).sum + net.layers.last.outFeatures - 1
 
     case class Run(out: Seq[Long], lasts: Seq[Int], dones: Int, firstIn: Int, lastOut: Int)
 

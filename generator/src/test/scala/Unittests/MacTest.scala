@@ -16,7 +16,7 @@ class MacTest extends AnyFlatSpec with ChiselScalatestTester {
 
     // One clock: drive inputs, check the sum seen so far, then step
     def step(dut: Mac, a: Int, w: Int, en: Boolean = true, clear: Boolean = false): Unit = {
-        dut.io.a.poke(a.U); dut.io.w.poke(w.S); dut.io.en.poke(en.B); dut.io.clear.poke(clear.B)
+        dut.io.a(0).poke(a.U); dut.io.w(0).poke(w.S); dut.io.en.poke(en.B); dut.io.clear.poke(clear.B)
         dut.clock.step()
     }
 
@@ -56,6 +56,20 @@ class MacTest extends AnyFlatSpec with ChiselScalatestTester {
             step(dut, 1, 1, clear = true)
             for (k <- 1 to 784) step(dut, actMax, wMin)
             dut.io.acc.expect((-784 * 255 * 128).S)
+        }
+    }
+
+    it should "add k products per clock" in {
+        val rnd = new Random(3)
+        test(new Mac(width, accW, 2)) { dut =>
+            var model = 0L
+            for (_ <- 0 until 200) {
+                val as = Seq.fill(2)(rnd.nextInt(actMax + 1)); val ws = Seq.fill(2)(rnd.nextInt(wMax - wMin + 1) + wMin)
+                for (j <- 0 until 2) { dut.io.a(j).poke(as(j).U); dut.io.w(j).poke(ws(j).S) }
+                dut.io.en.poke(true.B); dut.io.clear.poke(false.B); dut.clock.step()
+                model += as.zip(ws).map { case (a, w) => a.toLong * w }.sum
+                dut.io.acc.expect(model.S)
+            }
         }
     }
 
