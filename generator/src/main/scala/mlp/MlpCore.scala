@@ -85,7 +85,6 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val img   = RegInit(0.U(32.W))              // Image index in the batch
     when (io.start) {
         batch := Mux(io.args(0) === 0.U, 1.U, io.args(0))
-        img   := 0.U
     }
     val lastImage = img === batch - 1.U
 
@@ -109,7 +108,9 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val lastLayer = layer === (layers.length - 1).U
 
     // --- Input: ppb pixels per stream word (lowest bits = first pixel); later layers from the activation registers ---
-    val ppb        = (cfg.streamW / Bits) max 1                 // pixels per beat: 32 / 8 = 4
+    val ppb        = cfg.pixelsPerBeat                          // pixels per beat (e.g. 32 / 8 = 4)
+    require(ppb >= 1 && ppb * Bits <= cfg.streamW,
+        s"pixelsPerBeat $ppb x $Bits bit does not fit a ${cfg.streamW}-bit stream word")
     val word       = Reg(UInt(cfg.streamW.W))                   // the word being unpacked
     val have       = RegInit(0.U(log2Ceil(ppb + 1).W))          // pixels left in `word`
     val fromStream = layer === 0.U
@@ -137,13 +138,17 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
         when(i === inLast) { drained := true.B }
     }
 
+    // One pipeline stage for a valid/control bit; CTRL start empties it, so nothing from an
+    // aborted image reaches the MACs or the state machine after a restart
+    def stage(b: Bool): Bool = RegNext(b && !io.start, false.B)
+
     // --- MAC column, one cycle behind the issue (bank read latency) ---
     val macs = Module(new MacArray(Bits, N, accW))
     for (n <- 0 until N) macs.io.w(n) := RegNext(banks(n).read(base + i, issue).asSInt)
     macs.io.a     := RegNext(RegNext(a))                                 // pipeline register
-    macs.io.en    := RegNext(RegNext(issue, false.B), false.B)
+    macs.io.en    := stage(stage(issue))
     macs.io.clear := false.B
-    when(RegNext(RegNext(issue && i === inLast, false.B), false.B)) { state := State.sum }   // last product is in acc now
+    when(stage(stage(issue && i === inLast))) { state := State.sum }   // last product is in acc now
 
     // --- sum: acc + bias into registers ---
     when(state === State.sum) {
@@ -167,9 +172,9 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     // OVF_COUNT: saturated hidden activations since the last CTRL start (unused lanes have sum 0, never clamp)
     val ovf = RegInit(0.U(32.W))
     val ovfFlags = RegNext(VecInit(units.map(_.io.clamped)))
-    val ovfValid = RegNext(state === State.finish && !lastLayer, false.B)
+    val ovfValid = stage(state === State.finish && !lastLayer)
     val ovfInc   = RegNext(PopCount(ovfFlags))
-    val ovfAdd   = RegNext(ovfValid, false.B)
+    val ovfAdd   = stage(ovfValid)
     when(io.start) {
         ovf := 0.U
     }.elsewhen(ovfAdd) {
@@ -206,6 +211,19 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
             layer  := 0.U                           // ready for the next input 
         }
     }
+
+    // --- CTRL start: every run begins from a clean state, also after an aborted batch ---
+    when(io.start) {
+        state         := State.run
+        layer         := 0.U
+        i             := 0.U
+        drained       := false.B
+        o             := 0.U
+        img           := 0.U
+        have          := 0.U                             // drops a half-used stream word; `word` is then unused
+        macs.io.clear := true.B                          // partial sums of an aborted image
+    }
+
 
     io.done   := io.out.fire && io.out.bits.last
     io.result := result

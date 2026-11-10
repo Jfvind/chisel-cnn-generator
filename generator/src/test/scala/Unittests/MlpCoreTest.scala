@@ -36,7 +36,9 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
     def argmax(xs: Seq[Long]): Int = xs.indexOf(xs.max)
 
     def cfgFor(net: NetworkModel) =
-        AccelConfig(core = "mlp", nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures, streamW = 32)
+        AccelConfig(core = "mlp", nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures,
+                    streamW = 32, pixelsPerBeat = 32 / 8)
+    
 
     // Fixed cycles at full speed: sum_l (in_l + 4) + nOut - 1 (see MlpCore header)
     def fullSpeedCycles(net: NetworkModel): Int = net.layers.map(_.inFeatures + 4).sum + net.layers.last.outFeatures - 1
@@ -184,5 +186,17 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
         val net = WeightLoader.load(dir)
         val sv  = circt.stage.ChiselStage.emitSystemVerilog(new MlpCore(AccelConfig(core = "mlp", streamW = 8), net))
         assert("\\$readmemh".r.findAllIn(sv).length == 128, "one initialised weight bank per lane")
+    }
+
+    it should "restart cleanly on CTRL start after an aborted image" in {
+        test(new MlpCore(cfgFor(tiny), tiny)) { dut =>
+            // send half of an image (one word of 3 pixels -> 1 word total, so stop before the second layer finishes)
+            dut.io.start.poke(true.B); dut.clock.step(); dut.io.start.poke(false.B)
+            dut.io.in.valid.poke(true.B); dut.io.in.bits.data.poke(pack(Seq(255, 255, 0)).head.U)
+            dut.clock.step(); dut.io.in.valid.poke(false.B)
+            dut.clock.step(2)                                       // aborted mid-layer
+            // a fresh run must give the hand-checked answer for a new input
+            assert(checkImage(dut, tiny, Seq(100, 50, 20), None).out == Seq(125L, -70L))
+        }
     }
 }
