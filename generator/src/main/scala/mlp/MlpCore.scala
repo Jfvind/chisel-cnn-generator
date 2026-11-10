@@ -88,6 +88,12 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     }
     val lastImage = img === batch - 1.U
 
+    // --- Packet check: the stream's TLAST must come with the last word of the batch's last image ---
+    val shortPkt = RegInit(false.B)                           // TLAST came early: rest of this image is zeros, batch ends here
+    val longPkt  = RegInit(false.B)                           // no TLAST at the expected end: extra words follow
+    val draining = RegInit(false.B)                           // discarding extra words until TLAST
+    val endBatch = lastImage || shortPkt                      // the image being processed is the batch's last
+
     // --- Control state ---
     // run -> sum (acc + bias into registers) -> finish (activation or logits) -> run / output
     object State extends ChiselEnum { val run, sum, finish, output = Value }
@@ -115,19 +121,33 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val have       = RegInit(0.U(log2Ceil(ppb + 1).W))          // pixels left in `word`
     val fromStream = layer === 0.U
     val canIssue   = state === State.run && !drained
-    val pixValid   = have =/= 0.U || io.in.valid
-    val pixel      = Mux(have =/= 0.U, word(Bits - 1, 0), io.in.bits.data(Bits - 1, 0))
-    io.in.ready   := canIssue && fromStream && have === 0.U      // fetch a new word only when the old one is used
+    val inValid    = io.in.valid && !draining                 // the core never sees words that are being drained
+    val zeroFill   = shortPkt && have === 0.U                 // after an early TLAST: missing pixels are 0
+    val pixValid   = have =/= 0.U || inValid || zeroFill
+    val pixel      = Mux(have =/= 0.U, word(Bits - 1, 0),
+                     Mux(zeroFill, 0.U, io.in.bits.data(Bits - 1, 0)))
+    val takeWord   = canIssue && fromStream && have === 0.U && !shortPkt
+    io.in.ready   := takeWord || draining
     val issue      = canIssue && (!fromStream || pixValid)
     val actIdx     = if (N == 1) 0.U else i(log2Ceil(N) - 1, 0)
     val a          = Mux(fromStream, pixel, act(actIdx))
 
+    // which pixel index fetches the last word of an image (784 / 4 -> pixel 780)
+    val lastWordAt = (((layers.head.inFeatures - 1) / ppb) * ppb).U
+    val wordIn     = takeWord && io.in.valid                  // a word for the core was taken this cycle
+    when(wordIn) {
+        val expectEnd = lastImage && i === lastWordAt
+        when(io.in.bits.last && !expectEnd) { shortPkt := true.B }                    // too few words
+        when(!io.in.bits.last && expectEnd) { longPkt := true.B; draining := true.B } // too many words
+    }
+    when(draining && io.in.valid && io.in.bits.last) { draining := false.B }          // extra words gone
+
     when(issue && fromStream) {
-        val endOfImage = i === inLast                            // the rest of a partly used word is padding
-        when(have === 0.U) {                                     // took pixel 0 straight from the stream
+        val endOfImage = i === inLast                         // the rest of a partly used word is padding
+        when(have === 0.U && !zeroFill) {                     // took pixel 0 straight from the stream
             word := io.in.bits.data >> Bits
             have := Mux(endOfImage, 0.U, (ppb - 1).U)
-        }.otherwise {
+        }.elsewhen(have =/= 0.U) {
             word := word >> Bits
             have := Mux(endOfImage, 0.U, have - 1.U)
         }
@@ -200,13 +220,13 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val lastBeat = o === (cfg.nOut - 1).U               // Last score of this image
     io.out.valid     := state === State.output
     io.out.bits.data := saturate(cur)
-    io.out.bits.last := lastBeat && lastImage
+    io.out.bits.last := lastBeat && endBatch
     when(io.out.fire) {
         when(isBetter) { bestVal := cur; bestIdx := o }
         o := Mux(lastBeat, 0.U, o + 1.U)
         when(lastBeat) { 
             result := Mux(isBetter, o, bestIdx)     // RESULT valid the cycle after done
-            img    := Mux(lastImage, 0.U, img + 1.U)
+            img    := Mux(endBatch, 0.U, img + 1.U)
             state  := State.run
             layer  := 0.U                           // ready for the next input 
         }
@@ -222,6 +242,9 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
         img           := 0.U
         have          := 0.U                             // drops a half-used stream word; `word` is then unused
         macs.io.clear := true.B                          // partial sums of an aborted image
+        shortPkt      := false.B
+        longPkt       := false.B
+        draining      := false.B
     }
 
 
@@ -229,6 +252,7 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     io.result := result
     io.busy   := !(state === State.run && layer === 0.U && i === 0.U && !drained)
     io.ovf    := ovf
+    io.err    := shortPkt || longPkt
 
     // xs(idx) for a per-layer (or per-beat) constant; a one-element Vec takes no index bits
     def pick[T <: Data](xs: Seq[T], idx: UInt): T = if (xs.length == 1) xs.head else VecInit(xs)(idx)

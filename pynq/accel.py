@@ -58,7 +58,7 @@ class Accel:
     @property
     def status(self):
         s = self.read("STATUS")
-        return {"busy": bool(s & 1), "done": bool(s & 2)}
+        return {"busy": bool(s & 1), "done": bool(s & 2), "error": bool(s & 4)}
 
     # DMA buffers must be physically contiguous: pynq.allocate
     def _buf(self, key, n):
@@ -92,6 +92,11 @@ class Accel:
         self.dma.sendchannel.wait()
         self.dma.recvchannel.wait()                 # returns when core sends TLAST
         obuf.invalidate()                           # Drops stale cachelines so the CPU sees the new ones.
+
+        if self.read("STATUS") & 4:
+            raise RuntimeError("core reported a packet-length error: the input did not match "
+                               "n_in x batch (check ARG0 and the packing)")
+        
         return np.array(obuf), self.read("CYCLES")   # CYCLES: first input beat -> last output beat
 
     def close(self):
