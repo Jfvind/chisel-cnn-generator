@@ -23,6 +23,7 @@ class CoreIO(cfg: AccelConfig) extends Bundle {
     val done   = Output(Bool())                                   // Inference finished
     val result = Output(UInt(32.W))                               // RESULT register
     val ovf    = Output(UInt(32.W))                               // OVF_COUNT register
+    val err    = Output(Bool())                                   // packet length wrong (sticky until start)
 }
 
 // Base class. All core modules must have IOs matching CoreIO
@@ -73,4 +74,5 @@ class StreamStub(cfg: AccelConfig) extends AccelCore(cfg) {
     io.done := outFire && io.out.bits.last          // Pulse when last beat leaves
     io.result := lastCount
     io.ovf    := 0.U                               // Stub doesn't saturate
+    io.err := false.B
 }

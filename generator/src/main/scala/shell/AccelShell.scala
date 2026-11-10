@@ -88,7 +88,7 @@ class AccelShellInner(cfg: AccelConfig) extends Module {
 
     // --- Read mux: word index -> value
     val readMap: Seq[(UInt, UInt)] = Seq(
-        wordAddr(RegMap.STATUS) -> Cat(done, core.io.busy),      // bit1 = done, bit0 = busy
+        wordAddr(RegMap.STATUS) -> Cat(core.io.err, done, core.io.busy), // bit2 = packet error, bit1 = done, bit0 = busy
         wordAddr(RegMap.ID)     -> cfg.id.U(32.W),
         wordAddr(RegMap.CFG_HASH) -> cfg.cfgHash.U(32.W),
         wordAddr(RegMap.N_IN)     -> cfg.nIn.U(32.W),

@@ -429,18 +429,23 @@ def compare_card(b, cpu):
                 + kpi("FPGA accuracy", fmt(r.get("hw_accuracy"), 2, " %"), f"{fmt(n)} MNIST test images", pill)
                 + kpi("Accelerator time / image", fmt_time(core_ms),
                       f"CYCLES {fmt(r.get('cycles_median'))} @ {fmt(r.get('fclk_mhz'))} MHz")
-                + kpi("End-to-end / image", fmt_time(wall_ms), "Python + DMA on the ARM")
-                + kpi("Accelerator vs ARM CPU", f"{arm / core_ms:,.0f}×" if arm and core_ms else "–",
-                      "same board, one image at a time, compute only"
-                      + (f"; vs PC CPU {best_cpu / core_ms:,.1f}×" if best_cpu and core_ms else ""))
+                + kpi("End-to-end / image", fmt_time(r.get("hw_batched_ms") or wall_ms),
+                      f"in batches of {r.get('batch')}; one at a time {fmt_time(wall_ms)}" if r.get("hw_batched_ms")
+                      else "Python + DMA on the ARM")
+                + kpi(f"{fmt(n)} images: FPGA vs ARM",
+                      f"{r['hw_total_s']:,.2f} s vs {n * r['arm_batched_ms'] / 1e3:,.0f} s"
+                      if r.get("hw_batched_ms") and r.get("arm_batched_ms") else "–",
+                      f"{r['arm_batched_ms'] / r['hw_batched_ms']:,.0f}× faster, both batched"
+                      if r.get("hw_batched_ms") and r.get("arm_batched_ms") else "")
                 + "</div>")
     rows = [  # platform, arithmetic, accuracy, single ms, batched ms, bar class
         ("PC CPU · PyTorch", "float32", c.get("float_accuracy"), c.get("float_single_ms"), c.get("float_batched_ms"), "muted"),
         ("PC CPU · NumPy", f"int{c.get('bits', '')} reference", c.get("int_accuracy"), c.get("int_single_ms"),
          c.get("int_batched_ms"), "muted"),
         ("PYNQ ARM · NumPy", f"int{r.get('bits', '')} reference", r.get("arm_accuracy"), r.get("arm_single_ms"), r.get("arm_batched_ms"), "warn"),
-        ("PYNQ FPGA · end-to-end", "hardware", r.get("hw_accuracy"), r.get("hw_wall_ms"), None, "ok"),
+        ("PYNQ FPGA · end-to-end", "hardware", r.get("hw_accuracy"), r.get("hw_wall_ms"), r.get("hw_batched_ms"), "ok"),
         ("PYNQ FPGA · accelerator", "hardware", r.get("hw_accuracy"), r.get("hw_core_ms"), r.get("hw_core_ms"), "ok"),
+        ("PYNQ FPGA · batched", "hardware", r.get("hw_accuracy"), r.get("hw_batched_ms"), r.get("hw_batched_ms"), "ok")
     ]
     rows = [x for x in rows if x[2] is not None or x[3] is not None]
     table = "".join(f'<tr><td>{esc(p)}</td><td style="text-align:left">{esc(k)}</td><td>{fmt(acc, 2, " %")}</td>'
@@ -460,7 +465,7 @@ def compare_card(b, cpu):
             f'{latency_bars([(p, s, cls) for p, _, _, s, _, cls in rows])}'
             f'<div class="note">"Accelerator" is CYCLES / clock: the time the hardware itself needs. '
             f'"End-to-end" adds Python, the DMA driver and cache flushes on the ARM, which dominate for single '
-            f'images; batching several images per DMA transfer would close that gap.</div></div>')
+            f'images; the Batched column sends {r.get("batch", "N")} images per DMA transfer.</div></div>')
 
 
 def board_card(b, cpu=None):

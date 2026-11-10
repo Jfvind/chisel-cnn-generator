@@ -12,6 +12,12 @@ import shell.AccelConfig
 class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
     behavior of "MlpCore"
 
+    val ppb = 32 / 8
+
+    // One image -> stream words, pixel 0 in the lowest byte; the image is padded to whole words
+    def pack(x: Seq[Int]): Seq[BigInt] =
+        x.grouped(ppb).map(_.zipWithIndex.map { case (p, k) => BigInt(p) << (8 * k) }.sum).toSeq
+
     // Software model: hidden layers ReLU -> >> shift -> clamp 255, last layer raw sum
     def reference(net: NetworkModel, x: Seq[Int]): Seq[Long] =
         net.layers.zipWithIndex.foldLeft(x.map(_.toLong)) { case (in, (l, k)) =>
@@ -30,7 +36,9 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
     def argmax(xs: Seq[Long]): Int = xs.indexOf(xs.max)
 
     def cfgFor(net: NetworkModel) =
-        AccelConfig(core = "mlp", nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures, streamW = 32)
+        AccelConfig(core = "mlp", nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures,
+                    streamW = 32, pixelsPerBeat = 32 / 8)
+    
 
     // Fixed cycles at full speed: sum_l (in_l + 4) + nOut - 1 (see MlpCore header)
     def fullSpeedCycles(net: NetworkModel): Int = net.layers.map(_.inFeatures + 4).sum + net.layers.last.outFeatures - 1
@@ -38,7 +46,7 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
     case class Run(out: Seq[Long], lasts: Seq[Int], dones: Int, firstIn: Int, lastOut: Int)
 
     // One input vector in, nOut beats out. stall = Some(rnd): random VALID/READY, None: full speed.
-    def stream(dut: MlpCore, x: Seq[Int], nOut: Int, stall: Option[Random]): Run = {
+    def stream(dut: MlpCore, x: Seq[BigInt], nOut: Int, stall: Option[Random]): Run = {
         val got = scala.collection.mutable.ArrayBuffer[Long]()
         val lasts = scala.collection.mutable.ArrayBuffer[Int]()
         var sent = 0; var holding = false; var cyc = 0; var dones = 0; var firstIn = -1; var lastOut = -1
@@ -59,7 +67,7 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
             dut.clock.step()
             if (inFire) { sent += 1; holding = false }
             cyc += 1
-            assert(cyc < 20 * (x.length + 50) + 1000, "stream timeout")
+            assert(cyc < 20 * (x.length * ppb + 50) + 1000, "stream timeout")
         }
         dut.io.in.valid.poke(false.B); dut.io.out.ready.poke(false.B)
         Run(got.toSeq, lasts.toSeq, dones, firstIn, lastOut)
@@ -69,7 +77,7 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
     def checkImage(dut: MlpCore, net: NetworkModel, x: Seq[Int], stall: Option[Random]): Run = {
         val want = reference(net, x)
         dut.io.start.poke(true.B); dut.clock.step(); dut.io.start.poke(false.B)   // CTRL start: clears OVF_COUNT
-        val r = stream(dut, x, want.length, stall)
+        val r = stream(dut, pack(x), want.length, stall)
         assert(r.out == want, s"logits for input $x")
         assert(r.lasts == Seq(want.length - 1), s"TLAST must be on the last beat only, got ${r.lasts}")
         assert(r.dones == 1, "done must pulse once per input")
@@ -142,12 +150,35 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
         }
     }
 
+    it should "run a batch of images back to back with TLAST only after the last one" in {
+        val seed = sys.props.get("seed").map(_.toLong).getOrElse(System.nanoTime())
+        val rnd  = new Random(seed)
+        val net  = randomNet(rnd)
+        val (nIn, nOut) = (net.layers.head.inFeatures, net.layers.last.outFeatures)
+        test(new MlpCore(cfgFor(net), net)) { dut =>
+            for (batch <- Seq(3, 0, 1); stall <- Seq(None, Some(rnd))) {      // ARG0 = 0 behaves like 1
+                val n  = batch max 1
+                val xs = Seq.fill(n)(Seq.fill(nIn)(rnd.nextInt(256)))
+                dut.io.args(0).poke(batch.U)                                   // latched by start
+                dut.io.start.poke(true.B); dut.clock.step(); dut.io.start.poke(false.B)
+                val r = stream(dut, xs.flatMap(pack), n * nOut, stall)
+                val ctx = s"batch $batch, stall ${stall.isDefined}, seed $seed"
+                assert(r.out == xs.flatMap(reference(net, _)), s"scores per image, $ctx")
+                assert(r.lasts == Seq(n * nOut - 1), s"TLAST only on the very last beat, got ${r.lasts}, $ctx")
+                assert(r.dones == 1, s"done once per batch, $ctx")
+                dut.io.result.expect(argmax(reference(net, xs.last)).U)       // RESULT = the last image's class
+                dut.io.busy.expect(false.B, s"idle after the batch, $ctx")
+            }
+        }
+    }
+
     it should "resolve nIn, nOut and the weight hash from the network" in {
         val dir = new java.io.File(getClass.getResource("/weights").toURI).getPath
         val cfg = AccelConfig.resolve(AccelConfig(core = "mlp", nIn = 1, nOut = 1, weightBiasDir = dir))
         assert(cfg.nIn == 784 && cfg.nOut == 10 && cfg.paramHash != 0)
         val typical = AccelConfig.resolve(cfg.copy(shiftPolicy = "typical"))
         assert(typical.cfgHash != cfg.cfgHash, "other shifts -> other weights in hardware -> other CFG_HASH")
+        assert(cfg.pixelsPerBeat == 4, "32-bit stream, 8-bit pixels")
     }
 
     it should "elaborate the trained MNIST network" in {
@@ -155,5 +186,17 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
         val net = WeightLoader.load(dir)
         val sv  = circt.stage.ChiselStage.emitSystemVerilog(new MlpCore(AccelConfig(core = "mlp", streamW = 8), net))
         assert("\\$readmemh".r.findAllIn(sv).length == 128, "one initialised weight bank per lane")
+    }
+
+    it should "restart cleanly on CTRL start after an aborted image" in {
+        test(new MlpCore(cfgFor(tiny), tiny)) { dut =>
+            // send half of an image (one word of 3 pixels -> 1 word total, so stop before the second layer finishes)
+            dut.io.start.poke(true.B); dut.clock.step(); dut.io.start.poke(false.B)
+            dut.io.in.valid.poke(true.B); dut.io.in.bits.data.poke(pack(Seq(255, 255, 0)).head.U)
+            dut.clock.step(); dut.io.in.valid.poke(false.B)
+            dut.clock.step(2)                                       // aborted mid-layer
+            // a fresh run must give the hand-checked answer for a new input
+            assert(checkImage(dut, tiny, Seq(100, 50, 20), None).out == Seq(125L, -70L))
+        }
     }
 }

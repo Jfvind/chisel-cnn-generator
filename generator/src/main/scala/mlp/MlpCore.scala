@@ -80,6 +80,20 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
         mem
     }
 
+    // --- Batching input images ---
+    val batch = RegInit(1.U(32.W))              // Images pr batch. Default: 1
+    val img   = RegInit(0.U(32.W))              // Image index in the batch
+    when (io.start) {
+        batch := Mux(io.args(0) === 0.U, 1.U, io.args(0))
+    }
+    val lastImage = img === batch - 1.U
+
+    // --- Packet check: the stream's TLAST must come with the last word of the batch's last image ---
+    val shortPkt = RegInit(false.B)                           // TLAST came early: rest of this image is zeros, batch ends here
+    val longPkt  = RegInit(false.B)                           // no TLAST at the expected end: extra words follow
+    val draining = RegInit(false.B)                           // discarding extra words until TLAST
+    val endBatch = lastImage || shortPkt                      // the image being processed is the batch's last
+
     // --- Control state ---
     // run -> sum (acc + bias into registers) -> finish (activation or logits) -> run / output
     object State extends ChiselEnum { val run, sum, finish, output = Value }
@@ -99,27 +113,62 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val shift     = pick(layers.map(_.shift.U(log2Ceil(accW).W)), layer)
     val lastLayer = layer === (layers.length - 1).U
 
-    // --- Input mux + issue: layer 0 from the stream, later layers from the activation registers ---
+    // --- Input: ppb pixels per stream word (lowest bits = first pixel); later layers from the activation registers ---
+    val ppb        = cfg.pixelsPerBeat                          // pixels per beat (e.g. 32 / 8 = 4)
+    require(ppb >= 1 && ppb * Bits <= cfg.streamW,
+        s"pixelsPerBeat $ppb x $Bits bit does not fit a ${cfg.streamW}-bit stream word")
+    val word       = Reg(UInt(cfg.streamW.W))                   // the word being unpacked
+    val have       = RegInit(0.U(log2Ceil(ppb + 1).W))          // pixels left in `word`
     val fromStream = layer === 0.U
     val canIssue   = state === State.run && !drained
-    io.in.ready   := canIssue && fromStream
-    val issue      = canIssue && (!fromStream || io.in.valid)
+    val inValid    = io.in.valid && !draining                 // the core never sees words that are being drained
+    val zeroFill   = shortPkt && have === 0.U                 // after an early TLAST: missing pixels are 0
+    val pixValid   = have =/= 0.U || inValid || zeroFill
+    val pixel      = Mux(have =/= 0.U, word(Bits - 1, 0),
+                     Mux(zeroFill, 0.U, io.in.bits.data(Bits - 1, 0)))
+    val takeWord   = canIssue && fromStream && have === 0.U && !shortPkt
+    io.in.ready   := takeWord || draining
+    val issue      = canIssue && (!fromStream || pixValid)
     val actIdx     = if (N == 1) 0.U else i(log2Ceil(N) - 1, 0)
-    val a          = Mux(fromStream, io.in.bits.data(Bits - 1, 0), act(actIdx))
-    // shortcut: s_axis TLAST is not checked, the beat count comes from the network; check it if packets can be malformed
+    val a          = Mux(fromStream, pixel, act(actIdx))
+
+    // which pixel index fetches the last word of an image (784 / 4 -> pixel 780)
+    val lastWordAt = (((layers.head.inFeatures - 1) / ppb) * ppb).U
+    val wordIn     = takeWord && io.in.valid                  // a word for the core was taken this cycle
+    when(wordIn) {
+        val expectEnd = lastImage && i === lastWordAt
+        when(io.in.bits.last && !expectEnd) { shortPkt := true.B }                    // too few words
+        when(!io.in.bits.last && expectEnd) { longPkt := true.B; draining := true.B } // too many words
+    }
+    when(draining && io.in.valid && io.in.bits.last) { draining := false.B }          // extra words gone
+
+    when(issue && fromStream) {
+        val endOfImage = i === inLast                         // the rest of a partly used word is padding
+        when(have === 0.U && !zeroFill) {                     // took pixel 0 straight from the stream
+            word := io.in.bits.data >> Bits
+            have := Mux(endOfImage, 0.U, (ppb - 1).U)
+        }.elsewhen(have =/= 0.U) {
+            word := word >> Bits
+            have := Mux(endOfImage, 0.U, have - 1.U)
+        }
+    }
 
     when(issue) {
         i := Mux(i === inLast, 0.U, i + 1.U)
         when(i === inLast) { drained := true.B }
     }
 
+    // One pipeline stage for a valid/control bit; CTRL start empties it, so nothing from an
+    // aborted image reaches the MACs or the state machine after a restart
+    def stage(b: Bool): Bool = RegNext(b && !io.start, false.B)
+
     // --- MAC column, one cycle behind the issue (bank read latency) ---
     val macs = Module(new MacArray(Bits, N, accW))
     for (n <- 0 until N) macs.io.w(n) := RegNext(banks(n).read(base + i, issue).asSInt)
     macs.io.a     := RegNext(RegNext(a))                                 // pipeline register
-    macs.io.en    := RegNext(RegNext(issue, false.B), false.B)
+    macs.io.en    := stage(stage(issue))
     macs.io.clear := false.B
-    when(RegNext(RegNext(issue && i === inLast, false.B), false.B)) { state := State.sum }   // last product is in acc now
+    when(stage(stage(issue && i === inLast))) { state := State.sum }   // last product is in acc now
 
     // --- sum: acc + bias into registers ---
     when(state === State.sum) {
@@ -143,9 +192,9 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     // OVF_COUNT: saturated hidden activations since the last CTRL start (unused lanes have sum 0, never clamp)
     val ovf = RegInit(0.U(32.W))
     val ovfFlags = RegNext(VecInit(units.map(_.io.clamped)))
-    val ovfValid = RegNext(state === State.finish && !lastLayer, false.B)
+    val ovfValid = stage(state === State.finish && !lastLayer)
     val ovfInc   = RegNext(PopCount(ovfFlags))
-    val ovfAdd   = RegNext(ovfValid, false.B)
+    val ovfAdd   = stage(ovfValid)
     when(io.start) {
         ovf := 0.U
     }.elsewhen(ovfAdd) {
@@ -168,23 +217,42 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val bestVal  = Reg(SInt(accW.W))
     val bestIdx  = Reg(UInt(32.W))
     val isBetter = o === 0.U || cur > bestVal           // Only greater. lowest index wins ties
+    val lastBeat = o === (cfg.nOut - 1).U               // Last score of this image
     io.out.valid     := state === State.output
     io.out.bits.data := saturate(cur)
-    io.out.bits.last := o === (cfg.nOut - 1).U
+    io.out.bits.last := lastBeat && endBatch
     when(io.out.fire) {
         when(isBetter) { bestVal := cur; bestIdx := o }
-        o := Mux(io.out.bits.last, 0.U, o + 1.U)
-        when(io.out.bits.last) { 
+        o := Mux(lastBeat, 0.U, o + 1.U)
+        when(lastBeat) { 
             result := Mux(isBetter, o, bestIdx)     // RESULT valid the cycle after done
+            img    := Mux(endBatch, 0.U, img + 1.U)
             state  := State.run
             layer  := 0.U                           // ready for the next input 
         }
     }
 
+    // --- CTRL start: every run begins from a clean state, also after an aborted batch ---
+    when(io.start) {
+        state         := State.run
+        layer         := 0.U
+        i             := 0.U
+        drained       := false.B
+        o             := 0.U
+        img           := 0.U
+        have          := 0.U                             // drops a half-used stream word; `word` is then unused
+        macs.io.clear := true.B                          // partial sums of an aborted image
+        shortPkt      := false.B
+        longPkt       := false.B
+        draining      := false.B
+    }
+
+
     io.done   := io.out.fire && io.out.bits.last
     io.result := result
     io.busy   := !(state === State.run && layer === 0.U && i === 0.U && !drained)
     io.ovf    := ovf
+    io.err    := shortPkt || longPkt
 
     // xs(idx) for a per-layer (or per-beat) constant; a one-element Vec takes no index bits
     def pick[T <: Data](xs: Seq[T], idx: UInt): T = if (xs.length == 1) xs.head else VecInit(xs)(idx)
