@@ -16,8 +16,8 @@ class MacArrayTest extends AnyFlatSpec with ChiselScalatestTester {
     val actMax = (1 << width) - 1
 
     def step(dut: MacArray, a: Int, ws: Seq[Int], en: Boolean = true, clear: Boolean = false): Unit = {
-        dut.io.a.poke(a.U)
-        for (n <- 0 until lanes) dut.io.w(n).poke(ws(n).S)
+        dut.io.a(0).poke(a.U)
+        for (n <- 0 until lanes) dut.io.w(n)(0).poke(ws(n).S)
         dut.io.en.poke(en.B); dut.io.clear.poke(clear.B)
         dut.clock.step()
     }
