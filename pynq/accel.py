@@ -58,7 +58,7 @@ class Accel:
     @property
     def status(self):
         s = self.read("STATUS")
-        return {"busy": bool(s & 1), "done": bool(s & 2)}
+        return {"busy": bool(s & 1), "done": bool(s & 2), "error": bool(s & 4)}
 
     # DMA buffers must be physically contiguous: pynq.allocate
     def _buf(self, key, n):
@@ -75,9 +75,12 @@ class Accel:
         and n_out comes from the manifest; pass n_out for any other packet length."""
         x = np.asarray(x)
         if n_out is None:
-            if x.size != self.manifest["n_in"]:
-                raise ValueError(f"packet has {x.size} values but the core expects n_in={self.manifest['n_in']}; "
-                                 f"pass n_out explicitly for other packet lengths")
+            ppb = self.manifest.get("pixels_per_beat", 1)          # input values packed per stream word
+            words = -(-self.manifest["n_in"] // ppb)               # one image in stream words, rounded up
+            if x.size != words:
+                raise ValueError(f"packet has {x.size} words but one input is {words} words "
+                                 f"(n_in={self.manifest['n_in']}, {ppb} per word); "
+                                 "pass n_out explicitly for other packet lengths")
             n_out = self.manifest["n_out"]
         ibuf, obuf = self._buf("in", x.size), self._buf("out", n_out)
         ibuf[:] = x.astype(self.dtype, copy=False).ravel()
@@ -89,6 +92,11 @@ class Accel:
         self.dma.sendchannel.wait()
         self.dma.recvchannel.wait()                 # returns when core sends TLAST
         obuf.invalidate()                           # Drops stale cachelines so the CPU sees the new ones.
+
+        if self.read("STATUS") & 4:
+            raise RuntimeError("core reported a packet-length error: the input did not match "
+                               "n_in x batch (check ARG0 and the packing)")
+        
         return np.array(obuf), self.read("CYCLES")   # CYCLES: first input beat -> last output beat
 
     def close(self):

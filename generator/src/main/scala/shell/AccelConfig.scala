@@ -24,7 +24,8 @@ case class AccelConfig(
     weightBits: Int = 8,                            // mlp: quantization (QuantizationConfig)
     actBits: Int = 8,
     shiftPolicy: String = "worst",                  // mlp: "worst" (never clamps) or "typical", see WeightLoader
-    paramHash: Long = 0                             // set by resolve: the weights are part of CFG_HASH
+    paramHash: Long = 0,                             // set by resolve: the weights are part of CFG_HASH
+    pixelsPerBeat: Int = 1                          // set by resolve: input pixels packed per stream word (mlp: streamW / actBits)
 ) {
     // checks at elaboration
     require(Seq(8, 16, 32, 64).contains(streamW), s"streamW must be 8/16/32/64, got $streamW")
@@ -52,7 +53,8 @@ object AccelConfig {
         case "mlp"  =>
             val net = network(cfg)
             cfg.copy(nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures,
-                     paramHash = net.hashCode.toLong & 0xFFFFFFFFL)
+                     paramHash = net.hashCode.toLong & 0xFFFFFFFFL, 
+                     pixelsPerBeat = (cfg.streamW / cfg.weightBits) max 1) // must match MlpCore ppb
         case _      => cfg
     }
 }
