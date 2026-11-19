@@ -84,9 +84,6 @@ $RECYCLE.BIN/
 
 #Random spawns
 generator/project/metals.sbt
-.gitignore
-.gitignore
-.gitignore
 generator/project/project/metals.sbt
 
 # Local Python environments and generated width sweeps

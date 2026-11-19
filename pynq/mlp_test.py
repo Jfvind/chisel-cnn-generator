@@ -70,6 +70,16 @@ def signed(raw, bits):
     raw = raw.astype(np.int64) & ((1 << bits) - 1)
     return np.where(raw >= 1 << (bits - 1), raw - (1 << bits), raw)
 
+def pack(q, ppb, bits):
+    """(N, n_in) pixels -> (N, ceil(n_in / ppb)) uint32 words, pixel 0 in the lowest bits; images padded to whole words."""
+    n, k = q.shape
+    w = -(-k // ppb)
+    if bits == 8 and ppb == 4 and k % 4 == 0:
+        return np.ascontiguousarray(q, dtype=np.uint8).view("<u4")     # no copy: 4 bytes = 1 word
+    padded = np.zeros((n, w * ppb), dtype=np.uint64)
+    padded[:, :k] = q
+    shifts = np.arange(ppb, dtype=np.uint64) * np.uint64(bits)
+    return (padded.reshape(n, w, ppb) << shifts).sum(axis=2).astype(np.uint32)
 
 def ascii_digit(img):
     shades = " .:-=+*#%@"
@@ -108,17 +118,6 @@ def main():
           f"{bits}-bit  shift={net.get('shift_policy', '?')}  fclk={fclk} MHz", flush=True)
     ok = check("network matches overlay", net["layers"][0]["in_features"] == m["n_in"]
                and net["layers"][-1]["out_features"] == m["n_out"])
-
-    def pack(q, ppb, bits):
-        """(N, n_in) pixels -> (N, ceil(n_in / ppb)) uint32 words, pixel 0 in the lowest bits; images padded to whole words."""
-        n, k = q.shape
-        w = -(-k // ppb)
-        if bits == 8 and ppb == 4 and k % 4 == 0:
-            return np.ascontiguousarray(q, dtype=np.uint8).view("<u4")     # no copy: 4 bytes = 1 word
-        padded = np.zeros((n, w * ppb), dtype=np.uint64)
-        padded[:, :k] = q
-        shifts = np.arange(ppb, dtype=np.uint64) * np.uint64(bits)
-        return (padded.reshape(n, w, ppb) << shifts).sum(axis=2).astype(np.uint32)
 
     def run_hw(x):
         acc.set_arg(0, 1)

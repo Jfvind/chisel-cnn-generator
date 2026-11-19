@@ -1,7 +1,9 @@
 # Variables can be overwritten: make board CORE=mlp STREAM_W=16
 CORE ?= stub
 
-# --- Per-core defaults: <core>_<VAR>. Anything given on the command line still wins ---
+# ===========================================================
+# Per-core defaults: <core>_<VAR>. Anything given on the command line still wins
+# ===========================================================
 # stub: echoes every beat (+ARG0), so n_out follows n_in
 stub_N_IN     := 784
 stub_N_OUT     = $(N_IN)
@@ -19,15 +21,8 @@ QUANT_DIR     := generator/generated/quantized
 MNIST         := python/data/MNIST/raw/t10k-images-idx3-ubyte.gz python/data/MNIST/raw/t10k-labels-idx1-ubyte.gz
 mlp_EXTRA      = $(QUANT_DIR)/network.json $(wildcard $(QUANT_DIR)/*.csv) $(MNIST)
 
-# cnn: placeholders until the core exists
-cnn_N_IN      := 784
-cnn_N_OUT     := 10
-cnn_STREAM_W  := 32
-cnn_RUN       := cnn_test.py
-cnn_EXTRA     :=
-
 ifndef $(CORE)_STREAM_W
-    $(error Unknown CORE '$(CORE)'. Known cores: stub mlp cnn)
+    $(error Unknown CORE '$(CORE)'. Known cores: stub mlp)
 endif
 
 N_IN     ?= $($(CORE)_N_IN)
@@ -41,14 +36,18 @@ NAME     ?= accel
 JOBS     ?= 8
 HOST     ?= pynq-direct,pynq
 
-# --- Quantization (Scala WeightExporter + Python reference) ---
+# ===========================================================
+# Quantization (Scala WeightExporter + Python reference)
+# ===========================================================
 WEIGHT_BITS     ?= 8
 ACTIVATION_BITS ?= 8
 BIAS_BITS       ?= 32
 SHIFT_POLICY    ?= worst
 WEIGHTS         ?= python/models/csv
 
-# --- Tools (windows detection) ---
+# ==========================================================
+# Windows detection
+# =========================================================
 ifeq ($(OS),Windows_NT)
     VIVADO_DEFAULT := vivado.bat
     SBT_DEFAULT    := sbt.bat
@@ -62,7 +61,10 @@ VIVADO ?= $(VIVADO_DEFAULT)
 SBT    ?= $(SBT_DEFAULT)
 PYTHON ?= $(PYTHON_DEFAULT)
 
-# --- Paths + commands ---
+
+# =========================================================
+# Paths + commands
+# =========================================================
 BUILD := hw/vivado
 RTL_DIR := $(BUILD)/rtl
 OVERLAY := $(BUILD)/overlay/$(NAME).bit
@@ -79,20 +81,29 @@ EXPORT_ARGS = --weight-bits $(WEIGHT_BITS) --activation-bits $(ACTIVATION_BITS) 
 DEPLOY = $(PYTHON) hw/scripts/deploy.py --overlay $(OVERLAY) --host $(HOST) --run=$(RUN) \
          --args="$(ARGS)" --extra $(EXTRA)
 
-# --- Demo (#18): always the MLP, whatever CORE defaults to ---
+
+# ==========================================================
+# MNIST demo
+# ==========================================================
 DEMO_DIR   := demo/mlp
 DEMO_BUILD := hw/vivado/demo
 DEMO_ARGS  ?= --demo 5
 DEMO_LIVE  ?= --demo 5 --images 200 --out demo_run.json
+# ==========================================================
 
-.PHONY: rtl bitstream deploy board test reference reference-test report compare cpu-bench demo demo-build demo-freeze demo-report clean help	# targets that are not files
+
+.PHONY: rtl bitstream deploy board test reference reference-test report compare cpu-bench demo demo-build demo-freeze demo-report camera clean help	# targets that are not files
 
 help:
-	@echo Targets: test, reference, reference-test, rtl, bitstream, deploy, board, clean, report, compare, cpu-bench, demo, demo-build, demo-freeze, demo-report
+	@echo Targets: test, reference, reference-test, rtl, bitstream, deploy, board, clean, report, compare, cpu-bench, demo, demo-build, demo-freeze, demo-report, camera
 	@echo Config:  CORE=$(CORE) STREAM_W=$(STREAM_W) N_IN=$(N_IN) N_OUT=$(N_OUT) FCLK_MHZ=$(FCLK_MHZ) RUN=$(RUN) ARGS=$(ARGS)
 	@echo Quant:   WEIGHT_BITS=$(WEIGHT_BITS) ACTIVATION_BITS=$(ACTIVATION_BITS) BIAS_BITS=$(BIAS_BITS) SHIFT_POLICY=$(SHIFT_POLICY) WEIGHTS=$(WEIGHTS)
 	@echo Tools:   VIVADO=$(VIVADO) SBT=$(SBT) PYTHON=$(PYTHON)
 
+
+# ==========================================================
+# Tests
+# ==========================================================
 test:
 	cd generator && $(SBT) test
 
@@ -104,6 +115,10 @@ reference:
 reference-test: reference
 	cd python && $(PYTHON) -m unittest discover -s tests -t .
 
+
+# ==========================================================
+# Board deploying
+# ==========================================================
 rtl:
 	cd generator && $(SBT) "runMain shell.ShellGen $(GEN_ARGS)"
 
@@ -120,6 +135,10 @@ board: bitstream
 	$(DEPLOY)
 	$(PYTHON) hw/scripts/report.py $(BUILD)
 
+
+# ==========================================================
+# Reporting
+# ==========================================================
 # Vivado reports -> $(BUILD)/reports/dashboard.html   (make report OPEN=1 to open it)
 report:
 	$(PYTHON) hw/scripts/report.py $(BUILD) $(if $(OPEN),--open)
@@ -133,6 +152,10 @@ compare:
 cpu-bench:
 	cd python && $(PYTHON) -m scripts.benchmark_cpu
 
+
+# =========================================================
+# Demos
+# =========================================================
 # Deploy the frozen, verified MLP overlay in demo/mlp and run the demo (no Vivado needed)
 demo:
 	$(PYTHON) hw/scripts/deploy.py --overlay $(DEMO_DIR)/overlay/$(NAME).bit --host $(HOST) --run=mlp_test.py \
@@ -152,5 +175,14 @@ demo-freeze:
 demo-report:
 	$(PYTHON) hw/scripts/report.py $(DEMO_DIR) --cpu $(DEMO_DIR)/reports/cpu_benchmark.json --open
 
+# Live digits from a USB webcam on the board (Ctrl-C stops)
+camera:
+	$(PYTHON) hw/scripts/deploy.py --overlay $(OVERLAY) --host $(HOST) --run=camera_demo.py \
+	    --results=none.json --extra $(QUANT_DIR)/network.json $(wildcard $(QUANT_DIR)/*.csv)
+
+
+# ========================================================
+# Clean
+# ========================================================
 clean:
 	rm -rf $(BUILD)
