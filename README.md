@@ -55,35 +55,14 @@ make board CORE=mlp   # the MLP: bit-exactness, accuracy and speed on the board
 make report OPEN=1    # dashboard: timing, resources, Python vs hardware
 ```
 
-# Demo: MNIST digits on the PYNQ-Z2
-
-The MLP (784 -> 128 -> 10, 8 bit) is the project's reference demo. It stays runnable when the
-default core changes (e.g. to the CNN).
-
-```bash
-make demo          # frozen, verified MLP overlay in demo/mlp/ -> board (no Vivado, ~1 min)
-make demo-build    # rebuild the MLP from the current source (own build dir) and run the same demo
-```
-
-The demo (`pynq/mlp_test.py`) prints a few test digits as ASCII art with the FPGA's answer, checks
-every score bit-exactly against the Python reference and the same integer network on the board's
-ARM CPU, and reports accuracy, CYCLES and time per image.
-
-**Why two targets:** `demo` uses a frozen bitstream plus the exact quantized export it was built from,
-so it does not depend on the current generator code. `demo-build` proves the MLP still builds from
-source; CI also elaborates the MNIST MLP, so CNN work cannot silently break it.
-
-**Updating the frozen demo:** `make demo-build`; if it ends with `ALL PASSED`, `make demo-freeze`
-(refuses unless that board run passed), then commit `demo/mlp/` and tag it (`git tag mlp-demo-v1`).
-
-## Camera demo: live digits from a USB webcam
+# Camera demo: live digits from a USB webcam
 
 `pynq/camera_demo.py` classifies digits held up in front of a USB webcam plugged into the board.
 The hardware is the same MLP bitstream: the camera sits on the ARM side, which turns each frame into
 an MNIST-style 28x28 image and sends it to the FPGA like any test image.
 
 ```bash
-make board CORE=mlp   # once: build the MLP into hw/vivado (make camera uses that build, not demo/mlp)
+make board CORE=mlp   # once: build the MLP into hw/vivado (make camera uses that build)
 make camera           # live loop on the board: ASCII preview + the FPGA's answer, Ctrl-C stops
 ```
 
@@ -118,8 +97,7 @@ OpenCV must be importable in the PYNQ venv (`python3 -c "import cv2"`), and the 
 the 12 V supply (jumper on REG), since a camera on the USB host port can brown out a USB-powered board.
 
 The FPGA round trip takes ~2 ms per frame including Python; the camera and the preprocessing on the ARM
-are the bottleneck. The camera demo is deliberately not part of `make demo`: it depends on lighting
-and handwriting, while `make demo` is the reproducible, verified run.
+are the bottleneck.
 
 # Evaluation: Python vs hardware
 
@@ -157,12 +135,6 @@ For MNIST MLP, 2000 images, packed 4 pixels/word
 chisel-cnn-generator/
 ├── .github/workflows/
 │   └── ci.yml                          # sbt test on every push and pull request
-├── demo/mlp/                           # Frozen, verified MLP build for make demo (no Vivado needed)
-│   ├── overlay/                        # Bitstream, .hwh and hw_manifest.json
-│   ├── quant/                          # The quantized export the bitstream was built from
-│   ├── reports/                        # Vivado reports and board/CPU results of the frozen run
-│   ├── rtl/
-│   └── FROZEN.json                     # Commit, date and headline results
 ├── docs/                               # Numerical contract, export format and figures
 │   ├── figures/                        # Shell wiring and PYNQ dataflow (.tex/.svg/.pdf)
 │   ├── export-format.md
@@ -214,7 +186,6 @@ chisel-cnn-generator/
 │   ├── scripts/
 │   │   ├── build.tcl                   # Vivado: block design, synthesis, implementation, bitstream
 │   │   ├── deploy.py                   # Copies to the board over SSH, runs a script, fetches results
-│   │   ├── freeze_demo.py              # Verified build -> demo/mlp
 │   │   └── report.py                   # Vivado reports + results -> HTML dashboard
 │   └── vivado/                         # Build output (git-ignored)
 ├── pynq/                               # Runs on the board
@@ -238,6 +209,6 @@ chisel-cnn-generator/
 ├── .gitattributes                      # LF line endings for Makefile/Tcl/Python
 ├── .gitignore
 ├── LICENSE
-├── Makefile                            # One entry point: test, reference, rtl, bitstream, deploy, demo, report
+├── Makefile                            # One entry point: test, reference, rtl, bitstream, deploy, camera, report
 └── README.md
 ```

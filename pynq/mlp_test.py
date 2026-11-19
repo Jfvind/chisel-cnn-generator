@@ -113,7 +113,7 @@ def main():
         sys.exit(f"overlay core is '{m['core']}', not 'mlp'")
     net = load_network(HERE)
     bits, sw, fclk = net["input_bits"], m["stream_w"], m["fclk_mhz"]
-    ppb = m.get("pixels_per_beat", 1)       # Fallback to 1 keeps the old frozen version working
+    ppb = m.get("pixels_per_beat", 1)       # Fallback to 1 for overlays built before packing
     print(f"PYNQ {getattr(pynq, '__version__', '?')}  core=mlp  {m['n_in']} -> {m['n_out']}  stream={sw}b  "
           f"{bits}-bit  shift={net.get('shift_policy', '?')}  fclk={fclk} MHz", flush=True)
     ok = check("network matches overlay", net["layers"][0]["in_features"] == m["n_in"]

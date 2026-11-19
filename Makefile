@@ -80,22 +80,13 @@ EXPORT_ARGS = --weight-bits $(WEIGHT_BITS) --activation-bits $(ACTIVATION_BITS) 
 
 DEPLOY = $(PYTHON) hw/scripts/deploy.py --overlay $(OVERLAY) --host $(HOST) --run=$(RUN) \
          --args="$(ARGS)" --extra $(EXTRA)
+# =========================================================
 
 
-# ==========================================================
-# MNIST demo
-# ==========================================================
-DEMO_DIR   := demo/mlp
-DEMO_BUILD := hw/vivado/demo
-DEMO_ARGS  ?= --demo 5
-DEMO_LIVE  ?= --demo 5 --images 200 --out demo_run.json
-# ==========================================================
-
-
-.PHONY: rtl bitstream deploy board test reference reference-test report compare cpu-bench demo demo-build demo-freeze demo-report camera clean help	# targets that are not files
+.PHONY: rtl bitstream deploy board test reference reference-test report compare cpu-bench camera clean help	# targets that are not files
 
 help:
-	@echo Targets: test, reference, reference-test, rtl, bitstream, deploy, board, clean, report, compare, cpu-bench, demo, demo-build, demo-freeze, demo-report, camera
+	@echo Targets: test, reference, reference-test, rtl, bitstream, deploy, board, clean, report, compare, cpu-bench, camera
 	@echo Config:  CORE=$(CORE) STREAM_W=$(STREAM_W) N_IN=$(N_IN) N_OUT=$(N_OUT) FCLK_MHZ=$(FCLK_MHZ) RUN=$(RUN) ARGS=$(ARGS)
 	@echo Quant:   WEIGHT_BITS=$(WEIGHT_BITS) ACTIVATION_BITS=$(ACTIVATION_BITS) BIAS_BITS=$(BIAS_BITS) SHIFT_POLICY=$(SHIFT_POLICY) WEIGHTS=$(WEIGHTS)
 	@echo Tools:   VIVADO=$(VIVADO) SBT=$(SBT) PYTHON=$(PYTHON)
@@ -154,27 +145,8 @@ cpu-bench:
 
 
 # =========================================================
-# Demos
+# Camera
 # =========================================================
-# Deploy the frozen, verified MLP overlay in demo/mlp and run the demo (no Vivado needed)
-demo:
-	$(PYTHON) hw/scripts/deploy.py --overlay $(DEMO_DIR)/overlay/$(NAME).bit --host $(HOST) --run=mlp_test.py \
-	    --args="$(DEMO_LIVE)" --results=demo_run.json \
-	    --extra $(DEMO_DIR)/quant/network.json $(wildcard $(DEMO_DIR)/quant/*.csv) $(MNIST)
-
-# Rebuild the MLP from the current source in its own build dir and run the demo on it (all 10,000 images)
-demo-build:
-	"$(MAKE)" board CORE=mlp BUILD=$(DEMO_BUILD) ARGS="$(DEMO_ARGS)"
-
-# After demo-build passed: freeze its overlay, reports and the matching export into demo/mlp, then commit demo/mlp
-demo-freeze:
-	$(PYTHON) hw/scripts/freeze_demo.py --build $(DEMO_BUILD) --quant $(QUANT_DIR) --out $(DEMO_DIR) --name $(NAME)
-	$(PYTHON) hw/scripts/report.py $(DEMO_DIR) --cpu $(DEMO_DIR)/reports/cpu_benchmark.json
-
-# The frozen demo's dashboard (timing, resources, 10,000-image board results, frozen PC benchmark)
-demo-report:
-	$(PYTHON) hw/scripts/report.py $(DEMO_DIR) --cpu $(DEMO_DIR)/reports/cpu_benchmark.json --open
-
 # Live digits from a USB webcam on the board (Ctrl-C stops)
 camera:
 	$(PYTHON) hw/scripts/deploy.py --overlay $(OVERLAY) --host $(HOST) --run=camera_demo.py \
