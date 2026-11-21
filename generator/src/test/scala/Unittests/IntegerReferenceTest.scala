@@ -36,7 +36,8 @@ class IntegerReferenceTest extends AnyFlatSpec {
 
     def withExportCopy(body: Path => Unit): Unit = {
         val temporaryDirectory = Files.createTempDirectory("reference-export-")
-        Files.list(exportDirectory).forEach(file => Files.copy(file, temporaryDirectory.resolve(file.getFileName)))
+        val sources = Files.list(exportDirectory)
+        try sources.forEach(file => Files.copy(file, temporaryDirectory.resolve(file.getFileName))) finally sources.close()
         try body(temporaryDirectory) finally {
             val files = Files.list(temporaryDirectory)
             try files.forEach(file => Files.delete(file)) finally files.close()
@@ -108,6 +109,14 @@ class IntegerReferenceTest extends AnyFlatSpec {
     it should "reject exports with unsupported policies" in withExportCopy { copy =>
         val json = Files.readString(copy.resolve("network.json"))
         Files.writeString(copy.resolve("network.json"), json.replace("\"saturate\"", "\"wrap\""))
+        intercept[IllegalArgumentException](QuantizedReader.load(copy))
+    }
+
+    it should "reject missing fields and integers outside 32 bits with IllegalArgumentException" in withExportCopy { copy =>
+        val json = Files.readString(copy.resolve("network.json"))
+        Files.writeString(copy.resolve("network.json"), json.replace("\"activation\":\"relu\"", "\"no_activation\":\"relu\""))
+        intercept[IllegalArgumentException](QuantizedReader.load(copy))
+        Files.writeString(copy.resolve("network.json"), json.replaceFirst("\"shift\":\\d+", "\"shift\":10000000000"))
         intercept[IllegalArgumentException](QuantizedReader.load(copy))
     }
 }
