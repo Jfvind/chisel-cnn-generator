@@ -1,5 +1,7 @@
 # chisel-cnn-generator
-Parameterized Chisel generator for CNN inference accelerators on FPGA. Starts with an MLP; the integer reference is checked bit-exact against PyTorch.
+> [!DISCLAIMER]
+> The project has pivot to optimizing MLP accelerator for the time beeing
+Parameterized Chisel generator for MLP inference accelerators on FPGA; the integer reference is checked bit-exact against PyTorch.
 
 # Architecture
 
@@ -53,26 +55,49 @@ make board CORE=mlp   # the MLP: bit-exactness, accuracy and speed on the board
 make report OPEN=1    # dashboard: timing, resources, Python vs hardware
 ```
 
-# Demo: MNIST digits on the PYNQ-Z2
+# Camera demo: live digits from a USB webcam
 
-The MLP (784 -> 128 -> 10, 8 bit) is the project's reference demo. It stays runnable when the
-default core changes (e.g. to the CNN).
+`pynq/camera_demo.py` classifies digits held up in front of a USB webcam plugged into the board.
+The hardware is the same MLP bitstream: the camera sits on the ARM side, which turns each frame into
+an MNIST-style 28x28 image and sends it to the FPGA like any test image.
 
 ```bash
-make demo          # frozen, verified MLP overlay in demo/mlp/ -> board (no Vivado, ~1 min)
-make demo-build    # rebuild the MLP from the current source (own build dir) and run the same demo
+make board CORE=mlp   # once: build the MLP into hw/vivado (make camera uses that build)
+make camera           # live loop on the board: ASCII preview + the FPGA's answer, Ctrl-C stops
 ```
 
-The demo (`pynq/mlp_test.py`) prints a few test digits as ASCII art with the FPGA's answer, checks
-every score bit-exactly against the Python reference and the same integer network on the board's
-ARM CPU, and reports accuracy, CYCLES and time per image.
+**Pipeline per frame (on the ARM):**
 
-**Why two targets:** `demo` uses a frozen bitstream plus the exact quantized export it was built from,
-so it does not depend on the current generator code. `demo-build` proves the MLP still builds from
-source; CI also elaborates the MNIST MLP, so CNN work cannot silently break it.
+```
+camera frame 640x480 -> grayscale -> centre square (60 % of the height) -> blur
+  -> polarity: dark ink on paper is inverted, chalk on a blackboard is kept (median brightness decides)
+  -> background removal (70th percentile -> 0) -> tight box around the stroke -> stroke thickening
+  -> longest side to 20 px -> pasted into 28x28 -> centre of mass to (14, 14)
+  -> quantize_pixels -> pack (4 pixels/word) -> FPGA -> 10 scores -> argmax
+```
 
-**Updating the frozen demo:** `make demo-build`; if it ends with `ALL PASSED`, `make demo-freeze`
-(refuses unless that board run passed), then commit `demo/mlp/` and tag it (`git tag mlp-demo-v1`).
+These are the same steps MNIST itself was made with (digit fits 20x20, centred by mass), so the
+network sees images that look like its training data. Raw 720p cannot be the input: 921,600 inputs
+would need ~118 M weights in the first layer, far beyond the board's ~0.6 MB of BRAM.
+
+**Output:** the 28x28 image as ASCII art, the predicted digit, the *margin* (best score minus second
+best, a rough confidence measure in the network's integer units) and CYCLES / wall time per image.
+The ASCII preview is the first thing to check when an answer is wrong: if it does not look like an
+MNIST digit, the network has no chance.
+
+**Getting good results:**
+- Hold the digit inside the centre of the picture and let it fill most of that square.
+- Paper: a thick dark marker on white paper. Blackboard: a clean (wet-wiped) board, pressed chalk,
+  and an angle without glare from the ceiling lights.
+- Accuracy is lower than the 96.69 % on MNIST, because camera digits differ from the training set
+  (lighting, stroke width, angle). Retraining with augmentation would help and needs no hardware change.
+
+**Board setup:** the camera must be a standard UVC webcam (`lsusb`, `ls /dev/video*` on the board),
+OpenCV must be importable in the PYNQ venv (`python3 -c "import cv2"`), and the board should run on
+the 12 V supply (jumper on REG), since a camera on the USB host port can brown out a USB-powered board.
+
+The FPGA round trip takes ~2 ms per frame including Python; the camera and the preprocessing on the ARM
+are the bottleneck.
 
 # Evaluation: Python vs hardware
 
@@ -106,68 +131,84 @@ For MNIST MLP, 2000 images, packed 4 pixels/word
 
 # File overview
 
-### Repository root
-| File | Role |
-|---|---|
-| `docs` | Holds the illustrations used in READMEs across the repo. |
-| `Makefile` | One entry point for test, RTL generation, Vivado build and deploy; picks the right tools on Windows/Linux. |
-| `.gitattributes` | Forces LF line endings for Makefile/Tcl/Python so they work on both Windows and Linux. |
-| `.gitignore` | Keeps build output (`hw/vivado/`, `target/`, logs, bitstreams) out of git. |
-| `.github/workflows/ci.yml` | GitHub Actions: runs `sbt test` on every push and pull request. |
-| `LICENSE` | Project license. |
-
-### `python/` — training and reference
-| File | Role |
-|---|---|
-| `train_model.py` | Trains the MNIST MLP in PyTorch and exports weights/biases as CSV. |
-| `requirements.txt` | Python packages for training. |
-| `ReadME` | How to set up the venv and run the training. |
-| `0_weight.csv`, `0_bias.csv`, `2_weight.csv`, `2_bias.csv` | Trained float parameters per layer (`[in][out]` layout), input to the generator. |
-| `mlp_weights.pt` | The trained PyTorch model (state dict). |
-| `data/MNIST/` | MNIST dataset downloaded by torchvision. |
-
-### `generator/` — Chisel/Scala
-| File | Role |
-|---|---|
-| `build.sbt`, `project/build.properties` | sbt build: Scala 2.13, Chisel 6.7, chiseltest. |
-| `src/main/scala/Top.scala` | Early placeholder top + `TopGen`; currently used to try out the weight loader. |
-| `src/main/scala/MAC/MacArray.scala` | Dot product: activations × weights summed in an adder tree, plus bias. |
-| `src/main/scala/activation/Activation.scala` | ReLU, then right shift to bring the MAC sum back to an 8-bit activation. |
-| `src/main/scala/model/NetworkModel.scala` | Data classes for a quantized network (`LayerParams`: weights, bias, shift). |
-| `src/main/scala/service/WeightLoader.scala` | Reads the CSVs and quantizes them to int8 weights, wide biases and per-layer shifts. |
-| `src/main/scala/shell/` | AXI shell around any core — see the table below and `shell/README.md`. |
-| `src/test/scala/PlaceholderTest.scala` | Sanity test of `Top`. |
-| `src/test/scala/Unittests/MacArrayTest.scala` | Tests the MAC against a software model, incl. extreme values. |
-| `src/test/scala/Unittests/ActivationTest.scala` | Tests ReLU and shift against a software model. |
-| `src/test/scala/Unittests/WeightLoaderTest.scala` | Tests loading order, quantization, shifts and bias scaling. |
-| `src/test/resources/weights/` | Copy of the CSVs used by `WeightLoaderTest`. |
-| `src/test/scala/shell/AccelShellTest.scala` | Bus-model tests of the shell: AXI-Lite registers, byte strobes, streaming with TLAST/backpressure, port names. |
-
-### `generator/src/main/scala/shell/` — the AXI shell
-| File | Role |
-|---|---|
-| `AccelConfig.scala` | `AccelConfig` (sizes, stream width, clock, ID, config hash) and `RegMap` (fixed register offsets) — the single source of truth. |
-| `Axi.scala` | AXI-Lite and AXI-Stream port bundles whose names Vivado recognizes, plus `StreamBeat`. |
-| `AxiLiteSlave.scala` | AXI-Lite protocol engine: turns bus handshakes into a write pulse and a read address/data pair. |
-| `Core.scala` | `CoreIO` (the interface every core implements), the `AccelCore` factory, and the `StreamStub` test core. |
-| `AccelShell.scala` | Register file, cycle counter, soft reset and stream wiring (`AccelShellInner`) + AXI clock/reset top (`AccelShell`). |
-| `ShellGen.scala` | Generates `AccelShell.sv`, the Verilog wrapper `accel_top.v`, `shell_params.tcl` and `hw_manifest.json`. |
-| `README.md` | How the shell files fit together, with diagrams. |
-
-### `hw/` — FPGA build
-| File | Role |
-|---|---|
-| `README.md` | Prerequisites, board setup, how to build and run, register map. |
-| `scripts/build.tcl` | Vivado batch script: block design (PS + DMA + accel), synthesis, implementation, timing check, export of `.bit`/`.hwh`. |
-| `scripts/deploy.py` | Copies the overlay, driver and data files to the board over SSH, runs a test script there and copies `board_results.json` back to `reports/`. |
-| `scripts/report.py` | Vivado reports + board/CPU results -> one HTML dashboard (`make report`, `make compare`). |
-| `scripts/freeze_demo.py` | Copies a verified MLP build into `demo/mlp/` for `make demo`. |
-| `boards/TUL/pynq-z2/` | PYNQ-Z2 board files (from Xilinx/XilinxBoardStore) so Vivado knows the board's DDR/clock setup. |
-| `vivado/` *(generated, git-ignored)* | `rtl/` from ShellGen, Vivado `project/`, `reports/`, and the finished `overlay/`. |
-
-### `pynq/` — runs on the board
-| File | Role |
-|---|---|
-| `accel.py` | Generic driver: loads the overlay, checks ID/hash, register access, one packet through the DMA. |
-| `smoke_test.py` | Board test: ID/config, the AXI-Lite adder, and DMA streams through the stub; prints PASS/FAIL. |
-| `mlp_test.py` | MLP on the board: Python vectors bit-exact, 10,000 MNIST images vs the ARM CPU (accuracy, CYCLES, time), `--demo N` ASCII digits; writes `board_results.json`. |
+```
+chisel-cnn-generator/
+├── .github/workflows/
+│   └── ci.yml                          # sbt test on every push and pull request
+├── docs/                               # Numerical contract, export format and figures
+│   ├── figures/                        # Shell wiring and PYNQ dataflow (.tex/.svg/.pdf)
+│   ├── export-format.md
+│   └── quantization.md
+├── generator/                          # Chisel/Scala: quantization, cores, AXI shell, RTL generation
+│   ├── project/
+│   │   └── build.properties            # Specifies the sbt version
+│   ├── src/
+│   │   ├── main/scala/
+│   │   │   ├── activation/             # ReLU + shift back to the activation width
+│   │   │   │   └── Activation.scala
+│   │   │   ├── MAC/                    # Multiply-accumulate building blocks
+│   │   │   │   ├── Mac.scala
+│   │   │   │   └── MacArray.scala
+│   │   │   ├── mlp/                    # The folded MLP core
+│   │   │   │   └── MlpCore.scala
+│   │   │   ├── model/                  # Data classes for a quantized network
+│   │   │   │   ├── NetworkModel.scala
+│   │   │   │   └── QuantizationConfig.scala
+│   │   │   ├── service/                # Reads the float CSVs, quantizes, exports integers
+│   │   │   │   ├── WeightExporter.scala
+│   │   │   │   └── WeightLoader.scala
+│   │   │   ├── shell/                  # AXI shell around any core (see its README)
+│   │   │   │   ├── AccelConfig.scala   # Sizes, stream width, register map: single source of truth
+│   │   │   │   ├── AccelShell.scala
+│   │   │   │   ├── Axi.scala
+│   │   │   │   ├── AxiLiteSlave.scala
+│   │   │   │   ├── Core.scala
+│   │   │   │   ├── ShellGen.scala      # Entry point: writes the RTL and manifest for Vivado
+│   │   │   │   └── README.md
+│   │   │   └── Top.scala               # Early placeholder top
+│   │   └── test/
+│   │       ├── resources/weights/      # CSV copies used by the tests
+│   │       └── scala/                  # Tests against software models
+│   │           ├── shell/
+│   │           │   └── AccelShellTest.scala
+│   │           ├── Unittests/
+│   │           │   ├── ActivationTest.scala
+│   │           │   ├── MacArrayTest.scala
+│   │           │   ├── MacTest.scala
+│   │           │   ├── MlpCoreTest.scala
+│   │           │   ├── WeightExporterTest.scala
+│   │           │   └── WeightLoaderTest.scala
+│   │           └── PlaceholderTest.scala
+│   ├── generated/quantized/            # Integer export + test vectors from make reference
+│   └── build.sbt                       # Scala 2.13, Chisel 6.7
+├── hw/                                 # FPGA build and board tooling (see hw/README.md)
+│   ├── boards/TUL/pynq-z2/             # PYNQ-Z2 board files for Vivado
+│   ├── scripts/
+│   │   ├── build.tcl                   # Vivado: block design, synthesis, implementation, bitstream
+│   │   ├── deploy.py                   # Copies to the board over SSH, runs a script, fetches results
+│   │   └── report.py                   # Vivado reports + results -> HTML dashboard
+│   └── vivado/                         # Build output (git-ignored)
+├── pynq/                               # Runs on the board
+│   ├── accel.py                        # Generic driver: overlay, registers, DMA
+│   ├── camera_demo.py                  # Live webcam digits (make camera)
+│   ├── mlp_test.py                     # MLP: bit-exactness, accuracy, timing, --demo
+│   └── smoke_test.py                   # Stub core test
+├── python/                             # Training, integer reference and PC benchmarks (see python/README.md)
+│   ├── data/MNIST/                     # Downloaded by torchvision
+│   ├── models/                         # Trained model and float CSVs (input to the generator)
+│   ├── results/                        # PC benchmark and quantization results
+│   ├── scripts/
+│   │   ├── benchmark_cpu.py
+│   │   ├── evaluate_quantized.py
+│   │   ├── integer_reference.py
+│   │   └── train_model.py
+│   ├── tests/
+│   │   └── test_quantization.py
+│   ├── README.md
+│   └── requirements.txt
+├── .gitattributes                      # LF line endings for Makefile/Tcl/Python
+├── .gitignore
+├── LICENSE
+├── Makefile                            # One entry point: test, reference, rtl, bitstream, deploy, camera, report
+└── README.md
+```
