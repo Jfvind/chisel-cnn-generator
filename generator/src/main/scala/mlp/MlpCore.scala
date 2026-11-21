@@ -7,7 +7,7 @@ import java.io.File
 import java.nio.file.Files
 
 import activation.Activation
-import mac.MacArray
+import mac.{Mac, MacArray, MacPair}
 import model.NetworkModel
 import shell.{AccelConfig, AccelCore}
 
@@ -17,7 +17,8 @@ import shell.{AccelConfig, AccelCore}
 // N = widest layer lanes. Lane n = weight bank n + Mac n + bias n + Activation n and computes
 // neuron n of whichever layer is running; the same lanes are reused for every layer.
 //
-// Per layer, K inputs per clock (K = 2 when a stream word holds an even number of pixels, else 1):
+// Per layer, K inputs per clock (K = the largest of 4, 2, 1 that divides the pixels per stream word when two
+// lanes share a DSP, else of 2, 1; see "Multipliers" below):
 // inputs Ki..Ki+K-1 are broadcast to all lanes, lane n reads their K weights from one bank row and
 // accumulates sum_j a[Ki+j] * w[Ki+j][n]. Layer 0 takes its inputs straight from the stream (never
 // stored), later layers read the activation registers written by the layer before.
@@ -30,15 +31,18 @@ import shell.{AccelConfig, AccelCore}
 // Weight bank layout (one SyncReadMem per lane, initialised from bank_<n>.hex at elaboration):
 //   row layerBase(l) + i = w_l[Ki + j][n] in bits j*Bits, j < K,  layerBase(l) = sum of ceil(in/K)
 //   of the layers before l; 0 when lane n is unused in layer l or Ki + j is past the layer's inputs.
-//   MNIST 784 -> 128 -> 10, K = 2: 456 rows x 16 bits per lane.
+//   MNIST 784 -> 128 -> 10, K = 4: 228 rows x 32 bits per lane.
+//
+// Multipliers: with Bits <= 8, lanes 2m and 2m+1 share one DSP48E1 per input (MacPair: a * (w1 * 2^16 + w0)
+// gives both products), so N lanes x K inputs need N / 2 * K DSPs. MNIST, K = 4: 64 x 4 = 256 multipliers.
 //
 // Pipeline: bank read (1 cycle) + bank output register (1 cycle), the input is registered twice to meet
-// its weight; the MACs multiply two cycles after the read is issued and add the product one cycle later
-// (Mac has a product register, so multiply and add are never in the same clock).
+// its weight; the MACs multiply two cycles after the read is issued, and the product is in the accumulator
+// Mac.Latency = 3 cycles after that (multiply, sum of the K products, accumulate: one per clock).
 //
 // Cycles at full speed (stream never stalls): first s_axis beat at cycle 0, last m_axis beat at
-// cycle  sum_l (ceil(in_l / K) + 5) + nOut - 1   (ceil(in_l / K) reads, 2 cycles to the last multiply,
-// 1 to the last add, sum + finish per layer). MNIST, K = 2: (392 + 5) + (64 + 5) + 10 - 1 = 475.
+// cycle  sum_l (ceil(in_l / K) + 6) + nOut - 1   (ceil(in_l / K) reads, 2 cycles to the last multiply,
+// 2 to the last accumulate, sum + finish per layer). MNIST, K = 4: (196 + 6) + (32 + 6) + 10 - 1 = 249.
 // =============================================================================
 
 class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
@@ -54,7 +58,9 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val ppb     = cfg.pixelsPerBeat                    // pixels per stream word (e.g. 32 / 8 = 4)
     require(ppb >= 1 && ppb * Bits <= cfg.streamW,
         s"pixelsPerBeat $ppb x $Bits bit does not fit a ${cfg.streamW}-bit stream word")
-    val K       = if (ppb % 2 == 0) 2 else 1           // inputs per clock; must divide ppb so a group never spans two words
+    val pack    = MacPair.fits(Bits)                   // two lanes per DSP (MacPair)
+    val maxK    = if (pack) 4 else 2                   // 128 lanes: 64 x 4 packed or 128 x 2 = 256 multipliers
+    val K       = (maxK to 1 by -1).find(ppb % _ == 0).get   // inputs per clock; must divide ppb so a group never spans two words
     val groups  = layers.map(l => (l.inFeatures + K - 1) / K)   // bank rows (and clocks) per layer
 
     // --- Checks at elaboration ---
@@ -126,7 +132,7 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val lastLayer = layer === (layers.length - 1).U
 
     // --- Input: K pixels per clock from ppb per stream word (lowest bits = first pixel); later layers from the activation registers ---
-    val gpw        = ppb / K                                    // K-pixel groups per word: 4 / 2 = 2
+    val gpw        = ppb / K                                    // K-pixel groups per word: 4 / 4 = 1
     val word       = Reg(UInt(cfg.streamW.W))                   // the word being unpacked
     val have       = RegInit(0.U(log2Ceil(gpw + 1).W))          // groups left in `word`
     val fromStream = layer === 0.U
@@ -144,7 +150,7 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val actIdx     = if (actGroups.length == 1) 0.U else i(log2Ceil(actGroups.length) - 1, 0)
     val a          = Mux(fromStream, pixels, actGroups(actIdx))
 
-    // which group index fetches the last word of an image (784 pixels, 4 per word, K = 2 -> word 195 = group 390)
+    // which group index fetches the last word of an image (784 pixels, 4 per word, K = 4 -> word 195 = group 195)
     val lastWordAt = (((layers.head.inFeatures - 1) / ppb) * gpw).U
     val wordIn     = takeWord && io.in.valid                  // a word for the core was taken this cycle
     when(wordIn) {
@@ -175,7 +181,7 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     def stage(b: Bool): Bool = RegNext(b && !io.start, false.B)
 
     // --- MAC column, one cycle behind the issue (bank read latency) ---
-    val macs = Module(new MacArray(Bits, N, accW, K))
+    val macs = Module(new MacArray(Bits, N, accW, K, pack))
     for (n <- 0 until N) {
         val row = RegNext(banks(n).read(base + i, issue))
         macs.io.w(n) := VecInit.tabulate(K)(j => row(j * Bits + Bits - 1, j * Bits).asSInt)
@@ -183,7 +189,8 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     macs.io.a     := RegNext(RegNext(a))                                 // pipeline register
     macs.io.en    := stage(stage(issue))
     macs.io.clear := false.B
-    when(stage(stage(stage(issue && i === inLast)))) { state := State.sum }   // last product is in acc now (+1: Mac product register)
+    val lastInAcc = (0 until 1 + Mac.Latency).foldLeft(issue && i === inLast)((b, _) => stage(b))
+    when(lastInAcc) { state := State.sum }               // last product is in acc now (2 to the MACs + Mac.Latency - 1)
 
     // --- sum: acc + bias into registers ---
     when(state === State.sum) {
