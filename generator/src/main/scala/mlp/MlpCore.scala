@@ -33,11 +33,12 @@ import shell.{AccelConfig, AccelCore}
 //   MNIST 784 -> 128 -> 10, K = 2: 456 rows x 16 bits per lane.
 //
 // Pipeline: bank read (1 cycle) + bank output register (1 cycle), the input is registered twice to meet
-// its weight; the MACs accumulate two cycles after the read is issued.
+// its weight; the MACs multiply two cycles after the read is issued and add the product one cycle later
+// (Mac has a product register, so multiply and add are never in the same clock).
 //
 // Cycles at full speed (stream never stalls): first s_axis beat at cycle 0, last m_axis beat at
-// cycle  sum_l (ceil(in_l / K) + 4) + nOut - 1   (ceil(in_l / K) reads, 2 cycles to the last MAC,
-// sum + finish per layer). MNIST, K = 2: (392 + 4) + (64 + 4) + 10 - 1 = 473.
+// cycle  sum_l (ceil(in_l / K) + 5) + nOut - 1   (ceil(in_l / K) reads, 2 cycles to the last multiply,
+// 1 to the last add, sum + finish per layer). MNIST, K = 2: (392 + 5) + (64 + 5) + 10 - 1 = 475.
 // =============================================================================
 
 class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
@@ -182,7 +183,7 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     macs.io.a     := RegNext(RegNext(a))                                 // pipeline register
     macs.io.en    := stage(stage(issue))
     macs.io.clear := false.B
-    when(stage(stage(issue && i === inLast))) { state := State.sum }   // last product is in acc now
+    when(stage(stage(stage(issue && i === inLast)))) { state := State.sum }   // last product is in acc now (+1: Mac product register)
 
     // --- sum: acc + bias into registers ---
     when(state === State.sum) {
