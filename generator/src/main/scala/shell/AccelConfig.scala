@@ -22,7 +22,7 @@ case class AccelConfig(
     streamW: Int = 32,              // AXI-stream width (bits)
     addrW: Int = 12,                // AXI-Lite address bit-width (2^12 = 4 KB)
     fclkMhz: Int = 100,             // PL clock requested from Zynq PS
-    quantizedDir: String = "generated/quantized",   // mlp: the export from `make reference` (relative to generator/); widths are in its network.json
+    quantizedDir: String = "generated/quantized",   // mlp: export from `make reference`, relative to generator/
     paramHash: Long = 0,                             // set by resolve: the weights are part of CFG_HASH
     pixelsPerBeat: Int = 1                          // set by resolve: input pixels packed per stream word (mlp: streamW / activation bits)
 ) {
@@ -38,7 +38,7 @@ case class AccelConfig(
 }
 
 object AccelConfig {
-    // mlp: the quantized export, the same files the reference vectors and the board test come from
+    // mlp: read from the export, so the hardware, the test vectors and the board test share one quantization
     def network(cfg: AccelConfig): NetworkModel = QuantizedReader.load(Paths.get(cfg.quantizedDir))
 
     // Core-specific rules, applied by ShellGen before anything is generated, so that the

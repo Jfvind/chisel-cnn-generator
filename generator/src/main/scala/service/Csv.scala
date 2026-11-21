@@ -6,11 +6,10 @@ import scala.jdk.CollectionConverters._
 /*
 Reads and writes comma-separated files of numbers, one row per line. The float CSVs from
 train_model.py (read by WeightLoader), the integer CSVs of the export (written by WeightExporter, read
-by QuantizedReader) and the test vectors (written by reference.Evaluate) all share this
-layout, and one reader and one writer keep them byte for byte alike. That matters because
-parameter_sha256 hashes the exported CSVs and Python compares the vector files byte for byte. Values
-are trimmed before parsing, so "1, 2" and "1,2" read the same, a missing file fails with its full
-path, and every written line, the last one included, ends with a newline.
+by QuantizedReader) and the test vectors (written by reference.Evaluate) share this layout, and one
+reader and one writer keep their bytes alike, which matters because parameter_sha256 hashes the
+exported CSV bytes. Values are trimmed before parsing, so "1, 2" and "1,2" read the same, a missing
+file fails with its full path, and every written line, the last one included, ends with a newline.
 */
 object Csv {
     def read[T](file: Path)(parse: String => T): Seq[Seq[T]] = {

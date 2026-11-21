@@ -7,15 +7,11 @@ import org.scalatest.flatspec.AnyFlatSpec
 import service.{Csv, QuantizedReader, WeightExporter, WeightLoader}
 
 /*
-Tests the Scala reference (IntegerReference, QuantizedReader and Evaluate) against the Python
-reference and against small hand-worked networks. The Scala reference replaces
-python/scripts/integer_reference.py as the answer the hardware is checked against, so it has to
-agree with Python bit for bit: the same scores on the checked-in vectors, byte-identical vector
-files and the documented accuracies, 96.61 % for the float network and 96.69 % for the integer one.
-
-Paths are relative to generator/, like in the other tests. generated/quantized is the committed
-8-bit export with its vectors; they were first written by Python's reference and python/tests still
-recompute them independently, so matching them here keeps the two references tied together.
+Tests the reference package and QuantizedReader on the committed export and on small hand-worked
+networks. The reference must reproduce the committed vectors in generated/quantized exactly (python/tests
+recompute the same vectors with an independent implementation), write vector files byte-identical to
+the committed ones, and give 96.61 % float and 96.69 % integer accuracy on MNIST. Paths are relative to
+generator/, like in the other tests.
 
 The hand-worked network has 2 inputs, 2 hidden neurons and 1 output at 4 bits, so activationMax is
 15. The hidden layer has weights [[7, -8], [7, 0]], bias [1, 0] and shift 1, and the output layer has

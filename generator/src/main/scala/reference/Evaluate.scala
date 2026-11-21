@@ -8,25 +8,19 @@ import service.{Csv, QuantizedReader, WeightExporter, WeightLoader}
 
 /*
 Evaluates a quantized export on the 10,000 MNIST test images and writes the test vectors the hardware
-is checked against. It runs the float network (FloatReference on the trained float CSVs) and the
-integer network (IntegerReference on the export) on the same images, prints both accuracies, writes
-them to the results CSV, and writes the first N images with their expected integer scores as test
-vectors. `make reference` runs it right after WeightExporter:
+is checked against. The float network (FloatReference on the trained float CSVs) and the integer
+network (IntegerReference on the export) run on the same images; both accuracies are printed and
+written to the results CSV, and the first N images are written with their expected integer scores.
+`make reference` runs it right after WeightExporter:
 
     sbt "runMain reference.Evaluate --quantized-dir generated/quantized --float-dir ../python/models/csv"
 
-It replaces python/scripts/evaluate_quantized.py, so after training everything up to the board runs
-in Scala. Python's integer_reference.py stays only as an independent check in python/tests, which reads
-the vectors written here and recomputes them at every width CI builds.
-
-The vectors are the files in WeightExporter.TestVectorFiles (test_inputs.csv, expected_outputs.csv
-and test_vectors.json) next to the export, written byte for byte in the format of
-docs/export-format.md so Python, chiseltest and the board can read them unchanged. parameter_sha256
-covers network.json followed by each layer's weight and bias CSV, which lets readers detect vectors
-that belong to another export. A pixel enters both networks the way torchvision's ToTensor delivers it
-to PyTorch, as float32 byte / 255; the integer network then applies the input rule, and since a byte
-only has 256 values that is done once into a lookup table. The results CSV keeps the columns
-evaluate_quantized.py wrote.
+The vectors are the files in WeightExporter.TestVectorFiles next to the export, in the format of
+docs/export-format.md, so chiseltest, python/tests and the board read the same files. parameter_sha256
+covers network.json followed by each layer's weight and bias CSV, so vectors that belong to another
+export are detected. A pixel enters both networks as torchvision's ToTensor hands it to PyTorch,
+float32 byte / 255; the integer network then applies the input rule, and since a byte only has 256
+values that is done once into a lookup table.
 */
 
 object Evaluate {

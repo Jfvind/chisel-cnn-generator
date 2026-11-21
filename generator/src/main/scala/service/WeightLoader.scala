@@ -11,7 +11,7 @@ import model.{LayerParams, NetworkModel, QuantizationConfig}
 object WeightLoader {
     private val WeightFile = """(\d+)_weight\.csv""".r
 
-    /** One trained layer as train_model.py wrote it: float weights [input][output] and bias. */
+    // weights in [input][output] order, as train_model.py writes them
     case class FloatLayer(index: Int, weights: Seq[Seq[Double]], bias: Seq[Double])
 
     def readFloatLayers(dir: String): Seq[FloatLayer] = {

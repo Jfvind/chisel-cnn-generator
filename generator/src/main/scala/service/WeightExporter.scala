@@ -49,7 +49,7 @@ ${layers.mkString(",\n")}
         ("layers.csv" +: TestVectorFiles).foreach(name => Files.deleteIfExists(output.resolve(name)))
     }
 
-    // Written next to the export by reference.Evaluate (and python/scripts/evaluate_quantized.py)
+    // Written next to the export by reference.Evaluate; a new export deletes them (see write)
     val TestVectorFiles: Seq[String] = Seq("test_inputs.csv", "expected_outputs.csv", "test_vectors.json")
 
     def main(args: Array[String]): Unit = {

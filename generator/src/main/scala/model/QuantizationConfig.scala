@@ -11,7 +11,7 @@ case class QuantizationConfig(weightBits: Int = 8, activationBits: Int = 8, bias
     val activationMax: Int = (1 << activationBits) - 1
     val biasLimit: Long = 1L << (biasBits - 1)
 
-    // Input rule of docs/quantization.md: a pixel in 0.0..1.0 becomes floor(value * activationMax + 0.5), clipped
+    // pixel 0.0..1.0 -> input integer (rule 1 in docs/quantization.md)
     def quantizeInput(value: Double): Int = math.floor(value * activationMax + 0.5).max(0).min(activationMax).toInt
 
     def accumulatorBits(inputs: Int): Int = {
