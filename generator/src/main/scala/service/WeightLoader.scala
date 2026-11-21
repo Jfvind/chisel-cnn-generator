@@ -1,8 +1,6 @@
 package service
 
 import java.io.File
-import scala.io.Source
-import scala.util.Using
 
 import model.{LayerParams, NetworkModel, QuantizationConfig}
 
@@ -13,21 +11,28 @@ import model.{LayerParams, NetworkModel, QuantizationConfig}
 object WeightLoader {
     private val WeightFile = """(\d+)_weight\.csv""".r
 
-    def load(dir: String, config: QuantizationConfig = QuantizationConfig()): NetworkModel = {
+    /** One trained layer as train_model.py wrote it: float weights [input][output] and bias. */
+    case class FloatLayer(index: Int, weights: Seq[Seq[Double]], bias: Seq[Double])
+
+    def readFloatLayers(dir: String): Seq[FloatLayer] = {
         val folder = new File(dir)
         require(folder.isDirectory, s"Weight directory not found: ${folder.getAbsolutePath}")
-
         val indices = folder.listFiles().map(_.getName).collect { case WeightFile(i) => i.toInt }.sorted
         require(indices.nonEmpty, s"No weight files found in $dir")
+        indices.toSeq.map { i =>
+            val weights = Csv.read(new File(folder, s"${i}_weight.csv").toPath)(_.toDouble)
+            val bias    = Csv.read(new File(folder, s"${i}_bias.csv").toPath)(_.toDouble).flatten
+            require(weights.nonEmpty && bias.nonEmpty && weights.forall(_.length == bias.length),
+                s"Layer $i: weight columns do not match bias length ${bias.length}")
+            FloatLayer(i, weights, bias)
+        }
+    }
 
+    def load(dir: String, config: QuantizationConfig = QuantizationConfig()): NetworkModel = {
         // Scale of activations: input integers represent pixels in 0.0..1.0.
         var actScale = config.activationMax.toDouble
 
-        val layers = indices.toSeq.map { i =>
-            val weights = readCsv(new File(folder, s"${i}_weight.csv"))
-            val bias    = readCsv(new File(folder, s"${i}_bias.csv")).flatten
-            require(weights.nonEmpty && bias.nonEmpty && weights.forall(_.length == bias.length),
-                s"Layer $i: weight columns do not match bias length ${bias.length}")
+        val layers = readFloatLayers(dir).map { case FloatLayer(i, weights, bias) =>
             config.accumulatorBits(weights.length)
 
             val qWeights = weights.map(_.map(w => quantizeWeight(w, config)))
@@ -36,19 +41,13 @@ object WeightLoader {
                 val scaled = b * actScale * config.weightScale
                 require(scaled.isFinite, s"Layer $i: bias must be finite")
                 val rounded = math.round(scaled)
-                val limit = 1L << (config.biasBits - 1)
-                require(rounded >= -limit && rounded < limit, s"Layer $i: bias does not fit ${config.biasBits} bits")
+                require(rounded >= -config.biasLimit && rounded < config.biasLimit, s"Layer $i: bias does not fit ${config.biasBits} bits")
                 rounded.toInt
             }
             val shift = activationShift(qWeights, qBias, config)
 
             actScale = math.scalb(actScale * config.weightScale, -shift)
             LayerParams(i, qWeights, qBias, shift)
-        }
-
-        layers.zip(layers.drop(1)).foreach { case (a, b) =>
-            require(a.outFeatures == b.inFeatures,
-                s"Layer ${a.index} outputs ${a.outFeatures} but layer ${b.index} expects ${b.inFeatures}")
         }
 
         NetworkModel(layers, config)
@@ -86,12 +85,5 @@ object WeightLoader {
         }
         (0 until 63).find(fits).getOrElse(
             throw new IllegalArgumentException("Activation shift exceeds the reference arithmetic width"))
-    }
-
-    private def readCsv(file: File): Seq[Seq[Double]] = {
-        require(file.isFile, s"Missing file: ${file.getAbsolutePath}")
-        Using.resource(Source.fromFile(file)) { src =>
-            src.getLines().map(_.trim).filter(_.nonEmpty).map(_.split(",").map(_.trim.toDouble).toSeq).toSeq
-        }
     }
 }

@@ -95,13 +95,3 @@ def parameter_digest(directory, network):
         for kind in ("weight", "bias"):
             digest.update((directory / f"{layer['index']}_{kind}.csv").read_bytes())
     return digest.hexdigest()
-
-
-def write_test_vectors(directory, network, inputs):
-    directory = Path(directory)
-    scores = infer(inputs, network)
-    np.savetxt(directory / "test_inputs.csv", inputs, delimiter=",", fmt="%d")
-    np.savetxt(directory / "expected_outputs.csv", scores, delimiter=",", fmt="%d")
-    metadata = {"schema_version": 1, "parameter_sha256": parameter_digest(directory, network),
-                "samples": len(inputs), "input_features": inputs.shape[1], "output_features": scores.shape[1]}
-    (directory / "test_vectors.json").write_text(json.dumps(metadata, indent=2) + "\n")

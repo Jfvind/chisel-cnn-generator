@@ -11,13 +11,14 @@ flowchart TD
     B --> C[Scala WeightLoader: quantize]
     C --> D[NetworkModel]
     D -->|WeightExporter| E[Integer CSV + network.json]
-    E --> F[Python reference + accuracy]
-    A -->|Float checkpoint| F
+    E --> F[Scala reference.Evaluate: float + integer accuracy]
+    B --> F
     F --> V[Deterministic inputs + expected scores]
-    D -.-> G[MLP core: planned]
-    G -.-> H[AXI shell + PYNQ board]
-    V -.-> T[Bit-exact hardware comparison: planned]
-    H -.-> T
+    V -.->|independent check| P[Python integer reference in python/tests]
+    E -->|QuantizedReader| G[MlpCore in AXI shell]
+    G --> H[Vivado bitstream + PYNQ board]
+    V --> T[Bit-exact hardware comparison on the board]
+    H --> T
 ```
 
 # Python setup
@@ -33,7 +34,7 @@ make reference-test WEIGHT_BITS=4 ACTIVATION_BITS=4 BIAS_BITS=32
 
 # quantization
 
-Scala owns quantization; Python reads the resulting integers, widths and rules.
+Python trains; Scala owns quantization, the integer reference, accuracy and the test vectors.
 Weight, activation and bias widths are configurable. The existing fixed-scale,
 ReLU/truncating-shift/bit-extraction policy is preserved. Final scores stay wide
 and signed. With the default 8-bit configuration: float 96.61%, integer 96.69%
@@ -108,9 +109,10 @@ make report OPEN=1               # one page: timing, resources, accuracy and tim
 make compare BUILDS="hw/vivado/mlp-worst hw/vivado/mlp-typical"   # configurations next to each other
 ```
 
-The quantized export in `generator/generated/quantized/` must come from the same settings as the
-bitstream: run `make reference` with the same `WEIGHT_BITS` / `ACTIVATION_BITS` / `SHIFT_POLICY`
-before `make board CORE=mlp`, otherwise `mlp_test.py` reports that the export and overlay differ.
+`make board CORE=mlp` runs `make reference` first and builds the hardware from that export
+(`generator/generated/quantized/`), so the bitstream, the test vectors and the board test always come
+from the same quantized network. One command goes from float CSVs to inference on the board:
+`make board CORE=mlp WEIGHTS=path/to/csv WEIGHT_BITS=8 ACTIVATION_BITS=8`.
 
 ## Choosing batchsize
 ```powershell
@@ -154,7 +156,14 @@ chisel-cnn-generator/
 │   │   │   ├── model/                  # Data classes for a quantized network
 │   │   │   │   ├── NetworkModel.scala
 │   │   │   │   └── QuantizationConfig.scala
-│   │   │   ├── service/                # Reads the float CSVs, quantizes, exports integers
+│   │   │   ├── reference/              # Bit-exact reference: accuracy + test vectors (make reference)
+│   │   │   │   ├── Evaluate.scala      # Entry point: float/integer accuracy, writes the test vectors
+│   │   │   │   ├── FloatReference.scala
+│   │   │   │   ├── IntegerReference.scala
+│   │   │   │   └── Mnist.scala
+│   │   │   ├── service/                # Quantizes the float CSVs, writes and reads the integer export
+│   │   │   │   ├── Csv.scala
+│   │   │   │   ├── QuantizedReader.scala # Export -> NetworkModel, for the hardware and the reference
 │   │   │   │   ├── WeightExporter.scala
 │   │   │   │   └── WeightLoader.scala
 │   │   │   ├── shell/                  # AXI shell around any core (see its README)
@@ -163,9 +172,8 @@ chisel-cnn-generator/
 │   │   │   │   ├── Axi.scala
 │   │   │   │   ├── AxiLiteSlave.scala
 │   │   │   │   ├── Core.scala
-│   │   │   │   ├── ShellGen.scala      # Entry point: writes the RTL and manifest for Vivado
+│   │   │   │   ├── ShellGen.scala      # Entry point: reads the export, writes the RTL and manifest for Vivado
 │   │   │   │   └── README.md
-│   │   │   └── Top.scala               # Early placeholder top
 │   │   └── test/
 │   │       ├── resources/weights/      # CSV copies used by the tests
 │   │       └── scala/                  # Tests against software models
@@ -173,13 +181,13 @@ chisel-cnn-generator/
 │   │           │   └── AccelShellTest.scala
 │   │           ├── Unittests/
 │   │           │   ├── ActivationTest.scala
+│   │           │   ├── IntegerReferenceTest.scala
 │   │           │   ├── MacArrayTest.scala
 │   │           │   ├── MacTest.scala
 │   │           │   ├── MlpCoreTest.scala
 │   │           │   ├── WeightExporterTest.scala
 │   │           │   └── WeightLoaderTest.scala
-│   │           └── PlaceholderTest.scala
-│   ├── generated/quantized/            # Integer export + test vectors from make reference
+│   ├── generated/quantized/            # Integer export + test vectors from make reference; ShellGen builds from it
 │   └── build.sbt                       # Scala 2.13, Chisel 6.7
 ├── hw/                                 # FPGA build and board tooling (see hw/README.md)
 │   ├── boards/TUL/pynq-z2/             # PYNQ-Z2 board files for Vivado
@@ -193,17 +201,16 @@ chisel-cnn-generator/
 │   ├── camera_demo.py                  # Live webcam digits (make camera)
 │   ├── mlp_test.py                     # MLP: bit-exactness, accuracy, timing, --demo
 │   └── smoke_test.py                   # Stub core test
-├── python/                             # Training, integer reference and PC benchmarks (see python/README.md)
+├── python/                             # Training, an independent integer check and PC benchmarks (see python/README.md)
 │   ├── data/MNIST/                     # Downloaded by torchvision
 │   ├── models/                         # Trained model and float CSVs (input to the generator)
 │   ├── results/                        # PC benchmark and quantization results
 │   ├── scripts/
 │   │   ├── benchmark_cpu.py
-│   │   ├── evaluate_quantized.py
-│   │   ├── integer_reference.py
+│   │   ├── integer_reference.py        # Recomputes the Scala vectors in python/tests
 │   │   └── train_model.py
 │   ├── tests/
-│   │   └── test_quantization.py
+│   │   └── test_quantization.py        # Independent check of the Scala vectors (make reference-test)
 │   ├── README.md
 │   └── requirements.txt
 ├── .gitattributes                      # LF line endings for Makefile/Tcl/Python

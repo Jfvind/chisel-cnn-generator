@@ -16,7 +16,9 @@ mlp_N_IN      := 784
 mlp_N_OUT     := 10
 mlp_STREAM_W  := 32
 mlp_RUN       := mlp_test.py
-# mlp_test.py needs the quantized export (same config as the bitstream), the Python vectors and MNIST
+# rtl runs `make reference` first: ShellGen builds the hardware from that export, and
+# mlp_test.py checks the board against the same export, its test vectors and MNIST
+mlp_PREREQ    := reference
 QUANT_DIR     := generator/generated/quantized
 MNIST         := python/data/MNIST/raw/t10k-images-idx3-ubyte.gz python/data/MNIST/raw/t10k-labels-idx1-ubyte.gz
 mlp_EXTRA      = $(QUANT_DIR)/network.json $(wildcard $(QUANT_DIR)/*.csv) $(MNIST)
@@ -37,7 +39,7 @@ JOBS     ?= 8
 HOST     ?= pynq-direct,pynq
 
 # ===========================================================
-# Quantization (Scala WeightExporter + Python reference)
+# Quantization (Scala WeightExporter + reference.Evaluate)
 # ===========================================================
 WEIGHT_BITS     ?= 8
 ACTIVATION_BITS ?= 8
@@ -70,9 +72,7 @@ RTL_DIR := $(BUILD)/rtl
 OVERLAY := $(BUILD)/overlay/$(NAME).bit
 
 GEN_ARGS = --out ../$(RTL_DIR) --core $(CORE) --nIn $(N_IN) --nOut $(N_OUT) \
-           --streamW $(STREAM_W) --fclkMhz $(FCLK_MHZ) \
-           --weightBiasDir ../$(WEIGHTS) --weightBits $(WEIGHT_BITS) --actBits $(ACTIVATION_BITS) \
-           --shiftPolicy $(SHIFT_POLICY)
+           --streamW $(STREAM_W) --fclkMhz $(FCLK_MHZ) --quantizedDir ../$(QUANT_DIR)
 VIVADO_ARGS = -mode batch -nojournal -log $(BUILD)/vivado.log \
               -source hw/scripts/build.tcl -tclargs $(RTL_DIR) $(BUILD) $(NAME) $(JOBS) 0
 EXPORT_ARGS = --weight-bits $(WEIGHT_BITS) --activation-bits $(ACTIVATION_BITS) --bias-bits $(BIAS_BITS) \
@@ -98,11 +98,11 @@ help:
 test:
 	cd generator && $(SBT) test
 
-# Scala quantizes + exports, Python evaluates float vs integer and writes test vectors
+# Scala quantizes + exports, then evaluates float vs integer on MNIST and writes the test vectors
 reference:
-	cd generator && $(SBT) "runMain service.WeightExporter $(EXPORT_ARGS)"
-	cd python && $(PYTHON) -m scripts.evaluate_quantized
+	cd generator && $(SBT) "runMain service.WeightExporter $(EXPORT_ARGS)" "runMain reference.Evaluate --float-dir ../$(WEIGHTS)"
 
+# Python's integer reference recomputes the Scala vectors independently (python/tests)
 reference-test: reference
 	cd python && $(PYTHON) -m unittest discover -s tests -t .
 
@@ -110,7 +110,7 @@ reference-test: reference
 # ==========================================================
 # Board deploying
 # ==========================================================
-rtl:
+rtl: $($(CORE)_PREREQ)
 	cd generator && $(SBT) "runMain shell.ShellGen $(GEN_ARGS)"
 
 # For several builds stored run "make bitstream CORE=stub BUILD=hw/vivado/stub" - new runs doesn't overide stub.
