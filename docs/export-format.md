@@ -24,10 +24,10 @@ shapes/ranges, layer chaining and conservative MAC bounds. It reads values from
 Scala; it does not quantize weights or biases. NumPy int64 is a calculation
 container, not an assertion that the hardware uses 64-bit weights.
 
-## Python-produced reference files
+## Reference files
 
-`evaluate_quantized` compares the float checkpoint with the integer reference on
-MNIST and writes:
+`reference.Evaluate` (run by `make reference`) compares the float network with
+the integer reference on MNIST and writes:
 
 - `python/results/quantization_results.csv`: float/integer accuracy, number of
   test images, and the selected weight, activation and bias widths.
