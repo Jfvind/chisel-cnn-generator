@@ -11,6 +11,8 @@ val chiselVersion = "6.7.0"
 addCompilerPlugin("org.chipsalliance" % "chisel-plugin" % chiselVersion cross CrossVersion.full)
 libraryDependencies += "org.chipsalliance" %% "chisel" % chiselVersion
 libraryDependencies += "edu.berkeley.cs" %% "chiseltest" % "6.0.0"
+// JSON for reading network.json (reference.QuantizedReader); same version Chisel already brings in
+libraryDependencies += "com.lihaoyi" %% "ujson" % "3.1.0"
 
 // Slide "Getting Started": the ScalaTest/ScalaCheck bridge for property-based tests
 libraryDependencies += "org.scalatestplus" %%

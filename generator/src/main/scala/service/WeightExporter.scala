@@ -12,8 +12,7 @@ object WeightExporter {
             require(layer.bias.nonEmpty && layer.weights.forall(_.size == layer.outFeatures), "Invalid layer shape")
             require(layer.shift >= 0 && layer.shift < 63, "Invalid activation shift")
             require(layer.weights.flatten.forall(w => w >= -config.weightScale && w < config.weightScale), "Weight exceeds configured width")
-            val biasLimit = 1L << (config.biasBits - 1)
-            require(layer.bias.forall(b => b.toLong >= -biasLimit && b.toLong < biasLimit), "Bias exceeds configured width")
+            require(layer.bias.forall(b => b.toLong >= -config.biasLimit && b.toLong < config.biasLimit), "Bias exceeds configured width")
             for (j <- layer.bias.indices) {
                 val bound = BigInt(config.activationMax) * layer.weights.map(row => BigInt(row(j)).abs).sum + BigInt(layer.bias(j)).abs
                 require(bound < (BigInt(1) << (bits - 1)), s"Layer ${layer.index} can overflow its MAC width")
@@ -42,13 +41,16 @@ ${layers.mkString(",\n")}
         val output = Paths.get(directory)
         Files.createDirectories(output)
         for (layer <- network.layers) {
-            Files.writeString(output.resolve(s"${layer.index}_weight.csv"), layer.weights.map(_.mkString(",")).mkString("\n") + "\n")
-            Files.writeString(output.resolve(s"${layer.index}_bias.csv"), layer.bias.mkString("\n") + "\n")
+            Csv.write(output.resolve(s"${layer.index}_weight.csv"), layer.weights)
+            Csv.write(output.resolve(s"${layer.index}_bias.csv"), layer.bias.map(Seq(_)))
         }
         Files.writeString(output.resolve("network.json"), metadata)
         // A new parameter export invalidates previously generated reference vectors.
-        Seq("layers.csv", "test_inputs.csv", "expected_outputs.csv", "test_vectors.json").foreach(name => Files.deleteIfExists(output.resolve(name)))
+        ("layers.csv" +: TestVectorFiles).foreach(name => Files.deleteIfExists(output.resolve(name)))
     }
+
+    // Written next to the export by reference.Evaluate (and python/scripts/evaluate_quantized.py)
+    val TestVectorFiles: Seq[String] = Seq("test_inputs.csv", "expected_outputs.csv", "test_vectors.json")
 
     def main(args: Array[String]): Unit = {
         val allowed = Set("--input", "--output", "--weight-bits", "--activation-bits", "--bias-bits", "--shift-policy")

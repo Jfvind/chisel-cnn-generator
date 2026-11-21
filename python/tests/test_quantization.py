@@ -9,7 +9,7 @@ import unittest
 
 import numpy as np
 
-from scripts.integer_reference import infer, load_network, parameter_digest, quantize_input, requantize, write_test_vectors
+from scripts.integer_reference import infer, load_network, parameter_digest, quantize_input, requantize
 from scripts.train_model import DATA_DIR, QUANTIZED_DIR
 
 
@@ -107,18 +107,12 @@ class QuantizationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "finite"):
             quantize_input([np.nan], 4)
 
-    def test_exported_vectors_round_trip_and_identify_parameters(self):
+    def test_parameter_digest_changes_with_the_parameters(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             self.write_network(directory, self.network())
             network = load_network(directory)
-            inputs = np.array([[2, 3], [0, 1]])
-            write_test_vectors(directory, network, inputs)
-            metadata = json.loads((directory / "test_vectors.json").read_text())
-            self.assertEqual(metadata["parameter_sha256"], parameter_digest(directory, network))
-            np.testing.assert_array_equal(np.loadtxt(directory / "expected_outputs.csv", delimiter=","), [[1, -1], [-2, 1]])
-            np.testing.assert_array_equal(np.loadtxt(directory / "test_inputs.csv", delimiter=","), inputs)
-            previous = metadata["parameter_sha256"]
+            previous = parameter_digest(directory, network)
             (directory / "0_bias.csv").write_text("2\n-3\n")
             self.assertNotEqual(previous, parameter_digest(directory, network))
 
