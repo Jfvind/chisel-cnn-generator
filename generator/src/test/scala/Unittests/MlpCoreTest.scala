@@ -40,8 +40,8 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
                     streamW = 32, pixelsPerBeat = 32 / 8)
     
 
-    // Fixed cycles at full speed: sum_l (in_l + 4) + nOut - 1 (see MlpCore header)
-    def fullSpeedCycles(net: NetworkModel): Int = net.layers.map(_.inFeatures + 4).sum + net.layers.last.outFeatures - 1
+    // Fixed cycles at full speed: sum_l (ceil(in_l / 2) + 5) + nOut - 1 (see MlpCore header; 32-bit stream -> K = 2)
+    def fullSpeedCycles(net: NetworkModel): Int = net.layers.map(l => (l.inFeatures + 1) / 2 + 5).sum + net.layers.last.outFeatures - 1
 
     case class Run(out: Seq[Long], lasts: Seq[Int], dones: Int, firstIn: Int, lastOut: Int)
 
@@ -84,6 +84,7 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
         dut.io.result.expect(argmax(want).U)
         dut.io.busy.expect(false.B, "must be idle after the last beat")
         dut.io.ovf.expect(overflows(net, x).U, "OVF_COUNT = saturated hidden activations of this input")
+        dut.io.err.expect(false.B, "a correct packet must not raise the packet error")
         if (stall.isEmpty) assert(r.lastOut - r.firstIn == fullSpeedCycles(net), "cycles at full speed")
         r
     }
@@ -168,6 +169,7 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
                 assert(r.dones == 1, s"done once per batch, $ctx")
                 dut.io.result.expect(argmax(reference(net, xs.last)).U)       // RESULT = the last image's class
                 dut.io.busy.expect(false.B, s"idle after the batch, $ctx")
+                dut.io.err.expect(false.B, s"no packet error, $ctx")
             }
         }
     }
