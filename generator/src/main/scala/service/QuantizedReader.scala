@@ -8,16 +8,15 @@ import model.{LayerParams, NetworkModel, QuantizationConfig}
 Reads a quantized export (network.json plus <index>_weight.csv and <index>_bias.csv, written by
 WeightExporter) back into a NetworkModel. The export is the one place a network is quantized: the
 hardware generator (shell.AccelConfig.network) and the reference (reference.Evaluate) both read it
-here, so the bitstream, the test vectors and the board test are built from exactly the same files.
-It also lets either of them run on an export made earlier, without the float CSVs or the
-quantization step that produced it.
+here, so the bitstream, the test vectors and the board test are built from the same files, and an
+existing export can be used without the float CSVs that produced it.
 
 It checks the same contract as load_network in python/scripts/integer_reference.py: supported
 policies and widths, strictly increasing layer indices, parameter shapes and ranges, relu on the
 hidden layers and identity on the last, and a conservative MAC bound where
 activationMax * sum(|weights|) + |bias| must fit the accumulator. Input and activation widths must be
 equal, since the Scala scheme ties them, and NetworkModel itself checks that the layer sizes chain.
-A missing shift_policy is read as "worst", the policy every export had before the field existed.
+A missing shift_policy is read as "worst", since exports without the field were made with it.
 */
 
 object QuantizedReader {

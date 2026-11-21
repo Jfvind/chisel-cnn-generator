@@ -5,12 +5,11 @@ import java.nio.file.{Files, Path}
 import java.util.zip.GZIPInputStream
 
 /*
-Reads the MNIST test set from the IDX files torchvision downloads into python/data/MNIST/raw/, raw
-or gzipped, so the Scala reference can measure integer accuracy and pick test vectors without going
-through Python. An IDX file starts with two zero bytes, a type byte (0x08 for unsigned bytes) and the
-number of dimensions, followed by one big-endian int32 per dimension and then the data. The images
-come back in dataset order as arrays of 784 raw bytes; Java bytes are signed, so a pixel's value
-0..255 is byte & 0xff.
+Reads the MNIST test set from the IDX files torchvision downloads into python/data/MNIST/raw/, raw or
+gzipped. An IDX file starts with two zero bytes, a type byte (0x08 for unsigned bytes) and the number
+of dimensions, followed by one big-endian int32 per dimension and then the data. The images come back
+in dataset order as arrays of 784 raw bytes; Java bytes are signed, so a pixel's value 0..255 is
+byte & 0xff.
 */
 
 object Mnist {

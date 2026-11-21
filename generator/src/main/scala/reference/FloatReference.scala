@@ -3,16 +3,15 @@ package reference
 import service.WeightLoader.FloatLayer
 
 /*
-The trained network before quantization, run on the float weights train_model.py exported. It gives
-the float accuracy that the integer accuracy is compared against, so the cost of quantization can be
-measured without loading the PyTorch checkpoint. The network is the one build_model in
-train_model.py makes: every layer is sum = inputs . weights + bias, followed by ReLU on all layers but
-the last, whose raw scores pick the class (highest score, lowest index on ties).
+The trained network before quantization, run on the float weights train_model.py exports. It gives the
+float accuracy the integer accuracy is compared against, without loading the PyTorch checkpoint. The
+network is the one build_model in train_model.py makes: every layer is sum = inputs . weights + bias,
+followed by ReLU on all layers but the last, whose raw scores pick the class (highest score, lowest
+index on ties).
 
-The arithmetic is done in Double rather than PyTorch's float32, so a score can differ in the last
-bits; that only changes a prediction when two classes are almost tied, and the accuracy on the
-MNIST test set is the same 96.61 % as PyTorch reports. Inputs are pixels in 0.0..1.0, as torchvision's
-ToTensor hands them to the model.
+The arithmetic is Double rather than PyTorch's float32, so a score can differ in the last bits; that
+only changes a prediction when two classes are almost tied. Inputs are pixels in 0.0..1.0, as
+torchvision's ToTensor hands them to the model.
 */
 
 class FloatReference(layers: Seq[FloatLayer]) {

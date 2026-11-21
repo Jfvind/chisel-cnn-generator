@@ -4,23 +4,20 @@ import model.NetworkModel
 
 /*
 The bit-exact software model of the quantized network. infer() turns one image of unsigned input
-integers into the last layer's wide signed scores, and predict() picks the class from them. The
-Chisel tests, the board test and the test vectors all need one trusted answer per image, and keeping
-that answer in Scala next to the quantization in WeightLoader puts the whole numerical contract in
-one language (issue #60).
+integers into the last layer's wide signed scores, and predict() picks the class from them. It is the
+answer the Chisel tests, the test vectors and the board test are checked against.
 
 The contract is docs/quantization.md, and the arithmetic is the same as MacArray + Activation in
-MlpCore and as python/scripts/integer_reference.py:
+MlpCore:
 
     hidden layer   sum = inputs . weights + bias,   output = min(max(sum, 0) >> shift, activationMax)
     last layer     sum = inputs . weights + bias,   output = sum (no ReLU, no shift)
 
-Every sum must fit the layer's signed MAC width, and a sum outside it throws, as the contract's
-accumulator_overflow = "reject" demands. The weights are copied once into flat arrays in the CSV's
-[input][output] order, and inputs that are 0 are skipped because most MNIST pixels are, so 10,000
-images take under a second. predict() takes the highest score and the lowest index on ties, like the
-RESULT register. Turning pixels into input integers is part of the quantization itself and lives in
-QuantizationConfig.quantizeInput.
+Every sum must fit the layer's signed MAC width, and a sum outside it throws (accumulator_overflow =
+"reject"). The weights are copied once into flat arrays in the CSV's [input][output] order, and inputs
+that are 0 are skipped because most MNIST pixels are, so 10,000 images take under a second. predict()
+takes the highest score and the lowest index on ties, like the RESULT register. Turning pixels into
+input integers is part of the quantization and lives in QuantizationConfig.quantizeInput.
 */
 
 class IntegerReference(val network: NetworkModel) {
