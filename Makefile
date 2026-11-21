@@ -16,12 +16,11 @@ mlp_N_IN      := 784
 mlp_N_OUT     := 10
 mlp_STREAM_W  := 32
 mlp_RUN       := mlp_test.py
-# rtl runs `make reference` first: ShellGen builds the hardware from that export, and
-# mlp_test.py checks the board against the same export, its test vectors and MNIST
-mlp_PREREQ    := reference
-QUANT_DIR     := generator/generated/quantized
+# rtl runs `make board-reference` first: ShellGen builds the hardware from that export in the build
+# folder, and mlp_test.py checks the board against the same export, its test vectors and MNIST
+mlp_PREREQ    := board-reference
 MNIST         := python/data/MNIST/raw/t10k-images-idx3-ubyte.gz python/data/MNIST/raw/t10k-labels-idx1-ubyte.gz
-mlp_EXTRA      = $(QUANT_DIR)/network.json $(wildcard $(QUANT_DIR)/*.csv) $(MNIST)
+mlp_EXTRA      = $(BOARD_QUANT_DIR)/network.json $(wildcard $(BOARD_QUANT_DIR)/*.csv) $(MNIST)
 
 ifndef $(CORE)_STREAM_W
     $(error Unknown CORE '$(CORE)'. Known cores: stub mlp)
@@ -46,6 +45,9 @@ ACTIVATION_BITS ?= 8
 BIAS_BITS       ?= 32
 SHIFT_POLICY    ?= worst
 WEIGHTS         ?= python/models/csv
+# The committed export (make reference, sbt test, CI) and the one a board build makes from its own settings
+QUANT_DIR       ?= generator/generated/quantized
+BOARD_QUANT_DIR  = $(BUILD)/quantized
 
 # ==========================================================
 # Windows detection
@@ -72,18 +74,21 @@ RTL_DIR := $(BUILD)/rtl
 OVERLAY := $(BUILD)/overlay/$(NAME).bit
 
 GEN_ARGS = --out ../$(RTL_DIR) --core $(CORE) --nIn $(N_IN) --nOut $(N_OUT) \
-           --streamW $(STREAM_W) --fclkMhz $(FCLK_MHZ) --quantizedDir ../$(QUANT_DIR)
+           --streamW $(STREAM_W) --fclkMhz $(FCLK_MHZ) --quantizedDir ../$(BOARD_QUANT_DIR)
 VIVADO_ARGS = -mode batch -nojournal -log $(BUILD)/vivado.log \
               -source hw/scripts/build.tcl -tclargs $(RTL_DIR) $(BUILD) $(NAME) $(JOBS) 0
 EXPORT_ARGS = --weight-bits $(WEIGHT_BITS) --activation-bits $(ACTIVATION_BITS) --bias-bits $(BIAS_BITS) \
               --shift-policy $(SHIFT_POLICY) --input ../$(WEIGHTS)
+# $(call REFERENCE,export folder,results CSV), both relative to the repository root
+REFERENCE = cd generator && $(SBT) "runMain service.WeightExporter $(EXPORT_ARGS) --output ../$(1)" \
+            "runMain reference.Evaluate --quantized-dir ../$(1) --float-dir ../$(WEIGHTS) --results ../$(2)"
 
 DEPLOY = $(PYTHON) hw/scripts/deploy.py --overlay $(OVERLAY) --host $(HOST) --run=$(RUN) \
          --args="$(ARGS)" --extra $(EXTRA)
 # =========================================================
 
 
-.PHONY: rtl bitstream deploy board test reference reference-test report compare cpu-bench camera clean help	# targets that are not files
+.PHONY: rtl bitstream deploy board test reference board-reference reference-test report compare cpu-bench camera clean help	# targets that are not files
 
 help:
 	@echo Targets: test, reference, reference-test, rtl, bitstream, deploy, board, clean, report, compare, cpu-bench, camera
@@ -100,7 +105,11 @@ test:
 
 # Scala quantizes + exports, then evaluates float vs integer on MNIST and writes the test vectors
 reference:
-	cd generator && $(SBT) "runMain service.WeightExporter $(EXPORT_ARGS)" "runMain reference.Evaluate --float-dir ../$(WEIGHTS)"
+	$(call REFERENCE,$(QUANT_DIR),python/results/quantization_results.csv)
+
+# The same for a board build, kept in $(BUILD) so other widths or shift policies leave the committed export alone
+board-reference:
+	$(call REFERENCE,$(BOARD_QUANT_DIR),$(BUILD)/quantization_results.csv)
 
 # Python's integer reference recomputes the Scala vectors independently (python/tests)
 reference-test: reference
@@ -150,7 +159,7 @@ cpu-bench:
 # Live digits from a USB webcam on the board (Ctrl-C stops)
 camera:
 	$(PYTHON) hw/scripts/deploy.py --overlay $(OVERLAY) --host $(HOST) --run=camera_demo.py \
-	    --results=none.json --extra $(QUANT_DIR)/network.json $(wildcard $(QUANT_DIR)/*.csv)
+	    --results=none.json --extra $(BOARD_QUANT_DIR)/network.json $(wildcard $(BOARD_QUANT_DIR)/*.csv)
 
 
 # ========================================================

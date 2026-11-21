@@ -34,9 +34,9 @@ object QuantizedReader {
             "input_bits must equal activation_bits")
 
         val quantization = QuantizationConfig(integerField(json, "weight_bits"), integerField(json, "activation_bits"),
-            integerField(json, "bias_bits"), json.obj.get("shift_policy").map(_.str).getOrElse("worst"))
+            integerField(json, "bias_bits"), json.obj.get("shift_policy").map(_.strOpt.getOrElse(throw new IllegalArgumentException("shift_policy must be a string"))).getOrElse("worst"))
 
-        val layerEntries = json("layers").arr.toSeq
+        val layerEntries = field(json, "layers").arrOpt.getOrElse(throw new IllegalArgumentException("layers must be a list")).toSeq
         require(layerEntries.nonEmpty, "Expected a nonempty layer list")
         val layers = layerEntries.zipWithIndex.map { case (entry, position) =>
             val index        = integerField(entry, "index")
@@ -46,7 +46,7 @@ object QuantizedReader {
             val activation   = if (position == layerEntries.length - 1) "identity" else "relu"
             require(integerField(entry, "multiplier") == 1, "Only shift-only rescaling is supported")
             require(integerField(entry, "accumulator_bits") == quantization.accumulatorBits(inputCount), s"Layer $index: accumulator_bits does not match the widths")
-            require(entry("activation").str == activation, s"Layer $index: expected activation $activation")
+            require(field(entry, "activation").strOpt.contains(activation), s"Layer $index: expected activation $activation")
             require(shift >= 0 && shift < 63, s"Layer $index: invalid shift $shift")
 
             val weights = Csv.read(directory.resolve(s"${index}_weight.csv"))(_.toInt)
@@ -68,8 +68,11 @@ object QuantizedReader {
         NetworkModel(layers, quantization)
     }
 
-    private def integerField(json: ujson.Value, key: String): Int = json.objOpt.flatMap(_.get(key)).flatMap(_.numOpt) match {
-        case Some(number) if number.isWhole => number.toInt
-        case other => throw new IllegalArgumentException(s"Invalid or missing $key: $other")
+    private def field(json: ujson.Value, key: String): ujson.Value =
+        json.objOpt.flatMap(_.get(key)).getOrElse(throw new IllegalArgumentException(s"Missing $key"))
+
+    private def integerField(json: ujson.Value, key: String): Int = field(json, key).numOpt match {
+        case Some(number) if number.isValidInt => number.toInt
+        case other => throw new IllegalArgumentException(s"$key must be a 32-bit integer, got $other")
     }
 }

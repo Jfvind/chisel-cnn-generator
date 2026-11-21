@@ -86,7 +86,11 @@ object Evaluate {
         val split        = Mnist.test(Paths.get(options.getOrElse("--mnist-dir", "../python/data/MNIST/raw")))
         val inputs       = quantize(split, quantization)
         val integer      = integerAccuracy(reference, inputs, split.labels)
-        val float        = floatAccuracy(new FloatReference(WeightLoader.readFloatLayers(options.getOrElse("--float-dir", "../python/models/csv"))), split)
+        val floatLayers  = WeightLoader.readFloatLayers(options.getOrElse("--float-dir", "../python/models/csv"))
+        require(floatLayers.map(layer => (layer.weights.length, layer.bias.length)) ==
+                reference.network.layers.map(layer => (layer.inFeatures, layer.outFeatures)),
+            s"The float CSVs do not have the layer sizes of the export in $directory")
+        val float        = floatAccuracy(new FloatReference(floatLayers), split)
         val vectors      = inputs.take(vectorCount)
         writeTestVectors(directory, reference, vectors)
         writeResults(Paths.get(options.getOrElse("--results", "../python/results/quantization_results.csv")), float, integer, quantization)

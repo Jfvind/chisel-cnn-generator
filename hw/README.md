@@ -116,9 +116,9 @@ make board CORE=mlp                         # 32-bit beats: 784 pixels in, 10 si
 make board CORE=mlp SHIFT_POLICY=typical    # more activation precision, some activations saturate
 ```
 
-`make rtl CORE=mlp` first runs `make reference`, which quantizes `WEIGHTS` (default `python/models/csv`)
-with `WEIGHT_BITS` / `ACTIVATION_BITS` / `SHIFT_POLICY` into `generator/generated/quantized/`. ShellGen
-reads that export (`--quantizedDir`) and bakes the weights into BRAM (one bank per lane, `$readmemh`);
+`make rtl CORE=mlp` first runs `make board-reference`, which quantizes `WEIGHTS` (default `python/models/csv`)
+with `WEIGHT_BITS` / `ACTIVATION_BITS` / `SHIFT_POLICY` into `$(BUILD)/quantized/` and evaluates it there
+(`$(BUILD)/quantization_results.csv`), leaving the committed export alone. ShellGen reads that export (`--quantizedDir`) and bakes the weights into BRAM (one bank per lane, `$readmemh`);
 the board test checks against the same export. They are part of
 `CFG_HASH`, so a manifest from other weights is rejected by the driver. `RESULT` = argmax,
 `OVF_COUNT` = hidden activations that saturated since the last start (always 0 with `SHIFT_POLICY=worst`).

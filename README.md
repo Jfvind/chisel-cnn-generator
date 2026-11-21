@@ -109,9 +109,10 @@ make report OPEN=1               # one page: timing, resources, accuracy and tim
 make compare BUILDS="hw/vivado/mlp-worst hw/vivado/mlp-typical"   # configurations next to each other
 ```
 
-`make board CORE=mlp` runs `make reference` first and builds the hardware from that export
-(`generator/generated/quantized/`), so the bitstream, the test vectors and the board test always come
-from the same quantized network. One command goes from float CSVs to inference on the board:
+`make board CORE=mlp` first quantizes and evaluates like `make reference`, but into the build folder
+(`hw/vivado/quantized/`, or `$(BUILD)/quantized/`), and builds the hardware from that export, so the
+bitstream, the test vectors and the board test always come from the same quantized network and the
+committed export in `generator/generated/quantized/` stays as it is. One command goes from float CSVs to inference on the board:
 `make board CORE=mlp WEIGHTS=path/to/csv WEIGHT_BITS=8 ACTIVATION_BITS=8`.
 
 ## Choosing batchsize
@@ -187,7 +188,7 @@ chisel-cnn-generator/
 │   │           │   ├── MlpCoreTest.scala
 │   │           │   ├── WeightExporterTest.scala
 │   │           │   └── WeightLoaderTest.scala
-│   ├── generated/quantized/            # Integer export + test vectors from make reference; ShellGen builds from it
+│   ├── generated/quantized/            # Committed integer export + test vectors from make reference (sbt test, CI)
 │   └── build.sbt                       # Scala 2.13, Chisel 6.7
 ├── hw/                                 # FPGA build and board tooling (see hw/README.md)
 │   ├── boards/TUL/pynq-z2/             # PYNQ-Z2 board files for Vivado
