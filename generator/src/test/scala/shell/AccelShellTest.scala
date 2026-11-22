@@ -74,16 +74,18 @@ class AxiDriver(dut: AccelShellInner, rnd: Random) {
 
     // send one packet on s_axis, collect m_axis with random backpressure (stall = true)
     // or at full speed (stall = false: TVALID whenever data is left, TREADY always high).
+    // outBeats: output beats to wait for; -1 (default) = as many as input beats.
     // returns (received data, indexes of beats that had TLAST,
     //          cycle of the first s_axis handshake, cycle of the m_axis handshake with TLAST)
-    def stream(in: Seq[BigInt], stall: Boolean = true): (Seq[BigInt], Seq[Int], Int, Int) = {
+    def stream(in: Seq[BigInt], stall: Boolean = true, outBeats: Int = -1): (Seq[BigInt], Seq[Int], Int, Int) = {
+        val nOut = if (outBeats < 0) in.length else outBeats
         val sIn = dut.io.s_axis; val mOut = dut.io.m_axis
         var sent = 0; var holding = false       // holding = TVALID high, wait for TREADY
         val got = scala.collection.mutable.ArrayBuffer[BigInt]()
         val lasts = scala.collection.mutable.ArrayBuffer[Int]()
         var cyc = 0
         var firstIn = -1; var lastOut = -1
-        while(got.length < in.length) {
+        while(got.length < nOut) {
             if(!holding && sent < in.length && (!stall || rnd.nextInt(4) != 0)) holding = true
             sIn.tvalid.poke(holding.B)
             if(sent < in.length) { sIn.tdata.poke(in(sent).U); sIn.tlast.poke((sent == in.length - 1).B) }
