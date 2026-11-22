@@ -5,8 +5,8 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import scala.util.Random
 
-import model.{LayerParams, NetworkModel}
-import service.WeightLoader
+import model.{LayerParams, NetworkModel, QuantizationConfig}
+import service.{WeightExporter, WeightLoader}
 import shell.AccelConfig
 
 class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
@@ -176,13 +176,24 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
         }
     }
 
-    it should "resolve nIn, nOut and the weight hash from the network" in {
-        val dir = new java.io.File(getClass.getResource("/weights").toURI).getPath
-        val cfg = AccelConfig.resolve(AccelConfig(core = "mlp", nIn = 1, nOut = 1, weightBiasDir = dir))
-        assert(cfg.nIn == 784 && cfg.nOut == 10 && cfg.paramHash != 0)
-        val typical = AccelConfig.resolve(cfg.copy(shiftPolicy = "typical"))
-        assert(typical.cfgHash != cfg.cfgHash, "other shifts -> other weights in hardware -> other CFG_HASH")
-        assert(cfg.pixelsPerBeat == 4, "32-bit stream, 8-bit pixels")
+    it should "resolve nIn, nOut and the weight hash from the exported network" in {
+        val floatDir = new java.io.File(getClass.getResource("/weights").toURI).getPath
+        val exports  = Seq("worst", "typical").map { policy =>
+            val directory = java.nio.file.Files.createTempDirectory(s"mlp-export-$policy-")
+            WeightExporter.write(WeightLoader.load(floatDir, QuantizationConfig(shiftPolicy = policy)), directory.toString)
+            directory
+        }
+        try {
+            val Seq(worst, typical) = exports.map(directory =>
+                AccelConfig.resolve(AccelConfig(core = "mlp", nIn = 1, nOut = 1, quantizedDir = directory.toString)))
+            assert(worst.nIn == 784 && worst.nOut == 10 && worst.paramHash != 0)
+            assert(typical.paramHash != worst.paramHash, "other shifts -> other weights in hardware -> other CFG_HASH")
+            assert(worst.pixelsPerBeat == 4, "32-bit stream, 8-bit pixels")
+        } finally exports.foreach { directory =>
+            val files = java.nio.file.Files.list(directory)
+            try files.forEach(file => java.nio.file.Files.delete(file)) finally files.close()
+            java.nio.file.Files.delete(directory)
+        }
     }
 
     it should "elaborate the trained MNIST network" in {
