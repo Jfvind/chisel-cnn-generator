@@ -84,9 +84,6 @@ $RECYCLE.BIN/
 
 #Random spawns
 generator/project/metals.sbt
-.gitignore
-.gitignore
-.gitignore
 generator/project/project/metals.sbt
 
 # Local Python environments and generated width sweeps
@@ -103,8 +100,3 @@ generator/generated/mlp-*/
 
 
 venv/
-
-# Frozen MLP demo: the one bitstream that is committed on purpose (make demo-freeze)
-!demo/mlp/overlay/*.bit
-demo/mlp/reports/demo_run.json
-demo/mlp/reports/dashboard.html

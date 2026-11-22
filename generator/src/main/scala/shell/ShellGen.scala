@@ -138,6 +138,7 @@ object Manifest {
             |  "n_in": ${cfg.nIn},
             |  "n_out": ${cfg.nOut},
             |  "stream_w": ${cfg.streamW},
+            |  "pixels_per_beat": ${cfg.pixelsPerBeat},
             |  "addr_w": ${cfg.addrW},
             |  "fclk_mhz": ${cfg.fclkMhz},
             |  "num_args": ${RegMap.NUM_ARGS},
