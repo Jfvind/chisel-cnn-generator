@@ -1,7 +1,9 @@
 package shell
 
-import model.{NetworkModel, QuantizationConfig}
-import service.WeightLoader
+import java.nio.file.Paths
+
+import model.NetworkModel
+import service.QuantizedReader
 
 // =============================================================================
 // AccelConfig.scala — the single source of truth shared by Chisel, Vivado and PYNQ.
@@ -20,12 +22,9 @@ case class AccelConfig(
     streamW: Int = 32,              // AXI-stream width (bits)
     addrW: Int = 12,                // AXI-Lite address bit-width (2^12 = 4 KB)
     fclkMhz: Int = 100,             // PL clock requested from Zynq PS
-    weightBiasDir: String = "../python/models/csv", // mlp: dir with <i>_weight.csv / <i>_bias.csv (relative to generator/)
-    weightBits: Int = 8,                            // mlp: quantization (QuantizationConfig)
-    actBits: Int = 8,
-    shiftPolicy: String = "worst",                  // mlp: "worst" (never clamps) or "typical", see WeightLoader
+    quantizedDir: String = "generated/quantized",   // mlp: export from `make reference`, relative to generator/
     paramHash: Long = 0,                             // set by resolve: the weights are part of CFG_HASH
-    pixelsPerBeat: Int = 1                          // set by resolve: input pixels packed per stream word (mlp: streamW / actBits)
+    pixelsPerBeat: Int = 1                          // set by resolve: input pixels packed per stream word (mlp: streamW / activation bits)
 ) {
     // checks at elaboration
     require(Seq(8, 16, 32, 64).contains(streamW), s"streamW must be 8/16/32/64, got $streamW")
@@ -39,9 +38,8 @@ case class AccelConfig(
 }
 
 object AccelConfig {
-    // mlp: load the float CSVs and quantize them with this config's widths and shift policy
-    def network(cfg: AccelConfig): NetworkModel =
-        WeightLoader.load(cfg.weightBiasDir, QuantizationConfig(cfg.weightBits, cfg.actBits, shiftPolicy = cfg.shiftPolicy))
+    // mlp: read from the export, so the hardware, the test vectors and the board test share one quantization
+    def network(cfg: AccelConfig): NetworkModel = QuantizedReader.load(Paths.get(cfg.quantizedDir))
 
     // Core-specific rules, applied by ShellGen before anything is generated, so that the
     // manifest the driver reads describes what the hardware really does.
@@ -54,7 +52,7 @@ object AccelConfig {
             val net = network(cfg)
             cfg.copy(nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures,
                      paramHash = net.hashCode.toLong & 0xFFFFFFFFL, 
-                     pixelsPerBeat = (cfg.streamW / cfg.weightBits) max 1) // must match MlpCore ppb
+                     pixelsPerBeat = (cfg.streamW / net.quantization.activationBits) max 1) // must match MlpCore ppb
         case _      => cfg
     }
 }
