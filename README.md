@@ -119,15 +119,38 @@ foreach ($b in 1, 10, 100, 1000, 2000) {
     Copy-Item hw\vivado\reports\board_results.json hw\vivado\reports\batch_$b.json
 }
 ```
-For MNIST MLP, 2000 images, packed 4 pixels/word
+For MNIST MLP, 2000 images, packed 4 pixels/word, 249-cycle core
 | Batch | Time / image | Total (2,000 images) | Bit-exact |
 |---|---|---|---|
-| 1     |  2.13 ms | 4.26 s | 2000/2000 |
-| 10    |  0.22 ms | 0.45 s | 2000/2000 |
-| 100   |  0.038 ms | 0.076 s | 2000/2000 |
-| 1000  |  0.021 ms | 0.043 s | 2000/2000 |
-| 2000  |  0.022 ms | 0.044 s | 2000/2000 |
+| 1     | 2.17 ms   | 4.34 s  | 2000/2000 |
+| 10    | 0.228 ms  | 0.456 s | 2000/2000 |
+| 100   | 0.033 ms  | 0.065 s | 2000/2000 |
+| 1000  | 0.014 ms  | 0.028 s | 2000/2000 |
+| 2000  | 0.015 ms  | 0.030 s | 2000/2000 |
 
+
+## Resource usage
+MNIST MLP 784-128-10, 8-bit, PYNQ-Z2 (xc7z020) at 100 MHz, routed (WNS +0.297 ns). 128 lanes x 4 inputs
+per clock = 512 multiply-accumulates per clock, 249 cycles per image.
+
+| Block | LUT | FF | BRAM | DSP | Used for |
+|---|---|---|---|---|---|
+| MAC array (64 MacPairs) | 12,390 | 8,324 | - | 220 | Multiply, sum of 4 products, sign correction, accumulate |
+| Weight banks (128) | 6,994 | 0 | 128 x RAMB18 | - | One bank per lane; LUTs see below |
+| MLP control | 2,939 | 3,977 | - | - | FSM, unpacker, activations/logits, ReLU/shift, argmax, packet check |
+| AXI-Lite registers | 159 | 82 | - | - | Register map |
+| Platform (DMA, interconnect) | 2,861 | 3,831 | 2 x RAMB36 | - | Same in every build |
+| **Total** | **25,343 (47.6 %)** | **16,214 (15.2 %)** | **66 / 140** | **220 / 220** | |
+
+- **DSP:** two lanes share one DSP48 per input (`a * (w1 * 2^16 + w0)`), so 512 products need 256 DSPs.
+  The chip has 220, so 36 packed multipliers are built in fabric. Those 36 MacPairs show 32 extra FFs
+  (the product register outside the DSP).
+- **Weight banks:** the bank RTL is a plain BRAM. The ~7k LUTs reported under the banks are most likely
+  the 36 fabric multipliers, which Vivado places next to their operand, the bank output register.
+- **BRAM:** the count is set by read ports, not capacity: each lane reads 4 weights per clock from its own
+  bank (228 x 32 bit, 40 % full). The whole network is ~813 Kbit.
+- **Efficiency:** 44 accelerator LUTs and 0.43 DSP per MAC/clock, compared with 67 LUTs and 1 DSP for the
+  previous 1-input-per-clock core (929 cycles).
 
 # File overview
 
