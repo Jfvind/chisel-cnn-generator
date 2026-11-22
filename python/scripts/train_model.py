@@ -85,6 +85,9 @@ def main():
     print(f"Model gemt til: {OUTPUT_WEIGHTS_FILE}")
 
     # 6. Save param + bias as csv
+    # The CSVs feed the Scala export and the hardware, which only implement ReLU hidden layers
+    if ACTIVATION is not nn.ReLU:
+        raise ValueError(f"CSV export needs ACTIVATION = nn.ReLU, got {ACTIVATION.__name__}; the checkpoint is saved")
     CSV_DIR.mkdir(parents=True, exist_ok=True)
     for name, param in model.named_parameters():
         filename = CSV_DIR / f"{name.replace('.', '_')}.csv"

@@ -14,7 +14,7 @@ import circt.stage.ChiselStage      // For Verilog
 //   hw_manifest.json   values the PYNQ driver needs (register map, sizes, id, hash)
 //
 // ShellGen : App entry point, parses --out --core --nIn --nOut --streamW --addrW --fclkMhz
-//            (mlp also: --weightBiasDir --weightBits --actBits --shiftPolicy)
+//            (mlp also: --quantizedDir, the export from `make reference`; widths and shifts come from it)
 // Wrapper  : port list + Verilog wrapper text
 // Manifest : shell_params.tcl and hw_manifest.json text
 //
@@ -36,10 +36,7 @@ object ShellGen extends App {           // App provides args from CLI
         streamW = argOr("streamW", "32").toInt,
         addrW   = argOr("addrW", "12").toInt,
         fclkMhz = argOr("fclkMhz", "100").toInt,
-        weightBiasDir = argOr("weightBiasDir", "../python/models/csv"),
-        weightBits    = argOr("weightBits", "8").toInt,
-        actBits       = argOr("actBits", "8").toInt,
-        shiftPolicy   = argOr("shiftPolicy", "worst")
+        quantizedDir = argOr("quantizedDir", "generated/quantized")
     )
     val cfg = AccelConfig.resolve(requested)       // core-specific rules (stub: nOut = nIn)
     if (cfg != requested) println(s"[ShellGen] adjusted for core '${cfg.core}': $requested -> $cfg")

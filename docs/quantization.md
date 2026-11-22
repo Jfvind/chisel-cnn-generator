@@ -1,8 +1,10 @@
 # Numerical contract
 
-Scala owns parameter quantization. Python reads its exported integers and contract;
-it never requantizes float weights or biases. The original float checkpoint remains
-the accuracy baseline. The integer reference is the future hardware's bit-exact target.
+Scala owns parameter quantization and the integer reference
+(`generator/src/main/scala/reference/`). Python's independent integer reference
+reads the exported integers and contract to cross-check Scala's vectors; it never
+requantizes float weights or biases. The trained float weights remain the accuracy
+baseline. The integer reference is the hardware's bit-exact target.
 
 ## Configuration
 
@@ -65,13 +67,13 @@ make reference-test WEIGHT_BITS=8 ACTIVATION_BITS=8 BIAS_BITS=32
 make reference-test WEIGHT_BITS=12 ACTIVATION_BITS=12 BIAS_BITS=32
 ```
 
-The same Python code consumes each Scala export. No retraining is performed.
-`make reference` exports parameters, evaluates both models on 10,000 images and
-writes the first 64 test inputs plus expected integer outputs. `reference-test`
-also checks the exported arithmetic and vector round trip. The report records
-all three configured widths. Override `PYTHON`/`SBT` for your environment.
-To retain separate exports, use the exporter `--output` option and pass the
-same directory to evaluation with `--quantized-dir`.
+No retraining is performed. `make reference` exports parameters, then
+`reference.Evaluate` evaluates both models on 10,000 images and writes the first
+64 test inputs plus expected integer outputs. `reference-test` also lets the
+independent Python reference recompute the vectors and check the round trip.
+The report records all three configured widths. Override `PYTHON`/`SBT` for
+your environment. To retain separate exports, use the exporter `--output`
+option and pass the same directory to `reference.Evaluate --quantized-dir`.
 
 These are software-reference tests, not a full MLP hardware simulation or a board
 accuracy test. Those require the MLP core and comparisons from issues #14/#15/#21.
