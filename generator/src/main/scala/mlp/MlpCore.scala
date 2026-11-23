@@ -54,7 +54,6 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val N       = layers.map(_.outFeatures).max
     val maxIn   = layers.map(_.inFeatures).max
     val accW    = Bits * 2 + log2Ceil(maxIn)         // same width as Activation(Bits, maxIn).sumMaxSize
-    val actMax  = (1L << Bits) - 1
     val ppb     = cfg.pixelsPerBeat                    // pixels per stream word (e.g. 32 / 8 = 4)
     require(ppb >= 1 && ppb * Bits <= cfg.streamW,
         s"pixelsPerBeat $ppb x $Bits bit does not fit a ${cfg.streamW}-bit stream word")
@@ -66,16 +65,9 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     // --- Checks at elaboration ---
     require(layers.head.inFeatures == cfg.nIn, s"cfg.nIn ${cfg.nIn} != network input ${layers.head.inFeatures}")
     require(layers.last.outFeatures == cfg.nOut, s"cfg.nOut ${cfg.nOut} != network output ${layers.last.outFeatures}")
-    for (l <- layers) {
+    // Accumulator overflow is ruled out by QuantizedReader (per-layer width <= accW)
+    for (l <- layers)
         require(l.shift < accW, s"Layer ${l.index}: shift ${l.shift} does not fit the ${accW}-bit sum")
-        for (j <- 0 until l.outFeatures) {      // an accumulator overflow would wrap silently, unlike the clamp
-            val col = l.weights.map(_(j).toLong)
-            val hi  = actMax * col.filter(_ > 0).sum + l.bias(j)
-            val lo  = actMax * col.filter(_ < 0).sum + l.bias(j)
-            require(hi < (1L << (accW - 1)) && lo >= -(1L << (accW - 1)),
-                s"Layer ${l.index} neuron $j: worst-case sum [$lo, $hi] does not fit $accW bits")
-        }
-    }
 
     // --- Weight banks, hardcoded from the network ---
     val layerBase = groups.scanLeft(0)(_ + _)              // last element = total rows

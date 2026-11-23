@@ -5,18 +5,10 @@ import model.{NetworkModel, QuantizationConfig}
 
 object WeightExporter {
     def write(network: NetworkModel, directory: String): Unit = {
-        require(network.layers.nonEmpty, "Cannot export an empty network")
+        // No checks here: QuantizedReader validates the export when it is read (reference.Evaluate, right after)
         val config = network.quantization
         val layers = network.layers.zipWithIndex.map { case (layer, position) =>
             val bits = config.accumulatorBits(layer.inFeatures)
-            require(layer.bias.nonEmpty && layer.weights.forall(_.size == layer.outFeatures), "Invalid layer shape")
-            require(layer.shift >= 0 && layer.shift < 63, "Invalid activation shift")
-            require(layer.weights.flatten.forall(w => w >= -config.weightScale && w < config.weightScale), "Weight exceeds configured width")
-            require(layer.bias.forall(b => b.toLong >= -config.biasLimit && b.toLong < config.biasLimit), "Bias exceeds configured width")
-            for (j <- layer.bias.indices) {
-                val bound = BigInt(config.activationMax) * layer.weights.map(row => BigInt(row(j)).abs).sum + BigInt(layer.bias(j)).abs
-                require(bound < (BigInt(1) << (bits - 1)), s"Layer ${layer.index} can overflow its MAC width")
-            }
             val activation = if (position == network.layers.size - 1) "identity" else "relu"
             s"""    {"index":${layer.index},"in_features":${layer.inFeatures},"out_features":${layer.outFeatures},"accumulator_bits":$bits,"multiplier":1,"shift":${layer.shift},"activation":"$activation"}"""
         }

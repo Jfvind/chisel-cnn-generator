@@ -31,7 +31,8 @@ class WeightExporterTest extends AnyFlatSpec {
             WeightExporter.write(WeightLoader.load("../python/models/csv"), directory.toString)
             assert(!Files.exists(directory.resolve("test_inputs.csv")))
             val overflowing = LayerParams(0, Seq(Seq(127)), Seq(Int.MaxValue), 0)
-            intercept[IllegalArgumentException](WeightExporter.write(NetworkModel(Seq(overflowing)), directory.toString))
+            WeightExporter.write(NetworkModel(Seq(overflowing)), directory.toString)
+            intercept[IllegalArgumentException](QuantizedReader.load(directory))   // rejected when read back
             intercept[IllegalArgumentException](WeightLoader.load("../python/models/csv", QuantizationConfig(biasBits = 4)))
             intercept[IllegalArgumentException](QuantizationConfig(weightBits = 32))
         } finally {
