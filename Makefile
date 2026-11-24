@@ -116,10 +116,10 @@ DEPLOY = $(PYTHON) hw/scripts/deploy.py --overlay $(OVERLAY) --host $(HOST) --ru
 # =========================================================
 
 
-.PHONY: train rtl bitstream deploy board test reference board-reference reference-test report compare cpu-bench camera clean help	# targets that are not files
+.PHONY: train end-to-end rtl bitstream deploy board test reference board-reference reference-test report compare cpu-bench camera clean help	# targets that are not files
 
 help:
-	@echo Targets: train, test, reference, reference-test, rtl, bitstream, deploy, board, clean, report, compare, cpu-bench, camera
+	@echo Targets: train, end-to-end, test, reference, reference-test, rtl, bitstream, deploy, board, clean, report, compare, cpu-bench, camera
 	@echo Config:  CORE=$(CORE) STREAM_W=$(STREAM_W) N_IN=$(N_IN) N_OUT=$(N_OUT) FCLK_MHZ=$(FCLK_MHZ) RUN=$(RUN) ARGS=$(ARGS)
 	@echo Quant:   WEIGHT_BITS=$(WEIGHT_BITS) ACTIVATION_BITS=$(ACTIVATION_BITS) BIAS_BITS=$(BIAS_BITS) SHIFT_POLICY=$(SHIFT_POLICY) WEIGHTS=$(WEIGHTS)
 	@echo Data:    DATASET=$(DATASET) DATA_DIR=$(DATA_DIR) QUANT_DIR=$(QUANT_DIR) RESULTS_DIR=$(RESULTS_DIR)
@@ -133,6 +133,13 @@ help:
 train:
 	cd python && $(PYTHON) -m scripts.train_model --dataset $(DATASET)
 
+# Everything for one dataset, in order: train -> reference -> cpu-bench -> board (needs Vivado and the board)
+# make end-to-end DATASET=fashion. DATASET is passed on to every step, and a failing step stops the chain
+end-to-end:
+	$(MAKE) train
+	$(MAKE) reference
+	$(MAKE) cpu-bench
+	$(MAKE) board CORE=mlp
 
 # ==========================================================
 # Tests
