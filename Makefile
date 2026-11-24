@@ -88,10 +88,10 @@ DEPLOY = $(PYTHON) hw/scripts/deploy.py --overlay $(OVERLAY) --host $(HOST) --ru
 # =========================================================
 
 
-.PHONY: rtl bitstream deploy board test reference board-reference reference-test report compare cpu-bench camera clean help	# targets that are not files
+.PHONY: rtl bitstream deploy board test formal reference board-reference reference-test report compare cpu-bench camera clean help	# targets that are not files
 
 help:
-	@echo Targets: test, reference, reference-test, rtl, bitstream, deploy, board, clean, report, compare, cpu-bench, camera
+	@echo Targets: test, formal, reference, reference-test, rtl, bitstream, deploy, board, clean, report, compare, cpu-bench, camera
 	@echo Config:  CORE=$(CORE) STREAM_W=$(STREAM_W) N_IN=$(N_IN) N_OUT=$(N_OUT) FCLK_MHZ=$(FCLK_MHZ) RUN=$(RUN) ARGS=$(ARGS)
 	@echo Quant:   WEIGHT_BITS=$(WEIGHT_BITS) ACTIVATION_BITS=$(ACTIVATION_BITS) BIAS_BITS=$(BIAS_BITS) SHIFT_POLICY=$(SHIFT_POLICY) WEIGHTS=$(WEIGHTS)
 	@echo Tools:   VIVADO=$(VIVADO) SBT=$(SBT) PYTHON=$(PYTHON)
@@ -102,6 +102,10 @@ help:
 # ==========================================================
 test:
 	cd generator && $(SBT) test
+
+# Formal checks only (need z3 on PATH; `make test` runs them too, or skips them without z3)
+formal:
+	cd generator && $(SBT) "testOnly formal.*"
 
 # Scala quantizes + exports, then evaluates float vs integer on MNIST and writes the test vectors
 reference:

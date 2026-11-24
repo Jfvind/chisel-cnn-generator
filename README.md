@@ -29,8 +29,18 @@ See [python/README.md](python/README.md).
 
 ```sh
 make test
+make formal
 make reference-test WEIGHT_BITS=4 ACTIVATION_BITS=4 BIAS_BITS=32
 ```
+
+## Formal verification
+The multiply-accumulate is the most important computation in the hardware: every one of the 512 products per
+clock goes through it, and the two-weights-per-DSP packing (`MacPair`) is the trickiest arithmetic in the design.
+`formal/MacPairFormalSpec` proves with the z3 solver that a MacPair gives exactly the same accumulators as two
+plain MACs for *all* inputs, not just random ones (8-bit: any single product; 4-bit: any en/clear sequence).
+
+Run it with `make formal` (several minutes, also a separate CI job); `make test` skips it and shows it as canceled.
+Install z3 with `pip install z3-solver` (Windows/macOS) or `sudo apt-get install z3` (Linux).
 
 # quantization
 
@@ -201,6 +211,7 @@ chisel-cnn-generator/
 │   │   └── test/
 │   │       ├── resources/weights/      # CSV copies used by the tests
 │   │       └── scala/                  # Tests against software models
+│   │           ├── formal/             # Formal proof of MacPair with z3 (make formal)
 │   │           ├── shell/
 │   │           │   └── AccelShellTest.scala
 │   │           ├── Unittests/
