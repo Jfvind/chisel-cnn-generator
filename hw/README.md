@@ -64,6 +64,21 @@ Add `pynq-direct` (HostName 192.168.2.99, User xilinx) to `~/.ssh/config`. On th
 the board has no internet, so install packages on the board while it is on the router.
 Back to DHCP: `Set-NetIPInterface -InterfaceAlias "Ethernet 5" -Dhcp Enabled`.
 
+**If `pynq-direct` stops answering** (PC has 192.168.2.1 but `ping 192.168.2.99` fails): after the board has
+been on the router, dhclient keeps a cached lease and, with no DHCP server on the cable, retries it every ~15 s.
+Each failed retry runs `ip -4 addr flush dev eth0` (`/sbin/dhclient-script`, TIMEOUT branch), which also deletes
+the `eth0:1` alias. Fixed on the board (2026-11-24) with an exit hook that puts the alias back after every
+dhclient run, `/etc/dhcp/dhclient-exit-hooks.d/zz-pynq-direct-alias` (LF line endings):
+
+```sh
+if [ "$interface" = "eth0" ]; then
+    ip -4 addr replace 192.168.2.99/24 dev eth0 label eth0:1 2>/dev/null || true
+fi
+```
+
+After a reflash, reach the board without IPv4 through its IPv6 link-local address: `ping ff02::1%<ifIndex>`, then
+`Get-NetNeighbor -InterfaceAlias "Ethernet 5"` shows it, then `ssh xilinx@fe80::...%<ifIndex>`.
+
 ## Running it
 
 With `make` (Linux, or Windows with GNU make). The Makefile picks `vivado.bat`/`sbt.bat`/`python` on Windows
