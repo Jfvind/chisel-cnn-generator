@@ -426,7 +426,7 @@ def compare_card(b, cpu):
         best_cpu = min(cpu_ms) if cpu_ms else None
         arm = r.get("arm_single_ms")
         kpis = ('<div class="grid kpis">'
-                + kpi("FPGA accuracy", fmt(r.get("hw_accuracy"), 2, " %"), f"{fmt(n)} MNIST test images", pill)
+                + kpi("FPGA accuracy", fmt(r.get("hw_accuracy"), 2, " %"), f"{fmt(n)} {r.get('dataset', 'mnist')} test images", pill)
                 + kpi("Accelerator time / image", fmt_time(core_ms),
                       f"CYCLES {fmt(r.get('cycles_median'))} @ {fmt(r.get('fclk_mhz'))} MHz")
                 + kpi("End-to-end / image", fmt_time(r.get("hw_batched_ms") or wall_ms),

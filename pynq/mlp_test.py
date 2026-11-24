@@ -3,10 +3,10 @@
 Run on the board (deploy.py does this):  sudo python3 mlp_test.py --overlay accel.bit
 Needs next to it (Makefile mlp_EXTRA copies them): network.json + <i>_weight.csv / <i>_bias.csv
 (the quantized export), test_inputs.csv + expected_outputs.csv (Python reference vectors) and
-t10k-images-idx3-ubyte.gz + t10k-labels-idx1-ubyte.gz (MNIST test set).
+t10k-images-idx3-ubyte.gz + t10k-labels-idx1-ubyte.gz (the test set of --dataset: MNIST, Fashion-MNIST or KMNIST).
 
 1. Vectors : the 64 Python reference images through the FPGA, every score bit-exact.
-2. MNIST   : the 10,000 test images through the FPGA in batches of --batch (accuracy, throughput)   plus a latency sample one image at a time.
+2. Test set: the 10,000 test images through the FPGA in batches of --batch (accuracy, throughput)   plus a latency sample one image at a time.
              and through the same integer network in NumPy on the ARM (accuracy, time);
              every FPGA score row is compared with the ARM result, so this is bit-exact on 10k.
 3. Writes board_results.json; deploy.py copies it to <build>/reports/ for the dashboard.
@@ -96,12 +96,13 @@ def check(name, ok, detail=""):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--overlay", default="accel.bit")
-    ap.add_argument("--images", type=int, default=10000, help="MNIST test images to run (max 10000)")
+    ap.add_argument("--images", type=int, default=10000, help="test images to run (max 10000)")
     ap.add_argument("--batch", type=int, default=1000, help="images per DMA transfer in the throughput pass")
     ap.add_argument("--latency-images", type=int, default=500, help="images timed one at a time")
     ap.add_argument("--arm-single", type=int, default=200, help="images timed one by one on the ARM")
     ap.add_argument("--demo", type=int, default=0, help="print this many digits as ASCII art")
     ap.add_argument("--out", default="board_results.json")
+    ap.add_argument("--dataset", default="mnist", help="name of the test set, written to the results for the dashboard")
     a = ap.parse_args()
 
     import pynq
@@ -139,7 +140,7 @@ def main():
     bad = [k for k in range(len(vin)) if not np.array_equal(run_hw(vx[k])[0], vexp[k])]
     ok &= check(f"FPGA bit-exact on {len(vin)} Python vectors", not bad, f"mismatches at {bad[:10]}" if bad else "")
 
-    # 2. MNIST test set
+    # 2. Test set (MNIST, Fashion-MNIST or KMNIST: the same IDX file names)
     imgs = read_idx(HERE / "t10k-images-idx3-ubyte.gz").reshape(-1, 784)[:a.images]
     labels = read_idx(HERE / "t10k-labels-idx1-ubyte.gz")[:a.images].astype(np.int64)
     q = quantize_pixels(imgs, bits)
@@ -188,7 +189,7 @@ def main():
     hw_acc = 100.0 * float((hw_pred == labels).mean())
     arm_acc = 100.0 * float((arm_pred == labels).mean())
     cyc = np.array(cyc_single)
-    ok &= check(f"FPGA bit-exact vs ARM on {n} MNIST images (batches of {a.batch})", mism == 0,
+    ok &= check(f"FPGA bit-exact vs ARM on {n} {a.dataset} images (batches of {a.batch})", mism == 0,
                 f"{mism} mismatching images")
     ok &= check(f"RESULT register = argmax of the scores ({k_lat} single images)", result_bad == 0,
                 f"{result_bad} differ")
@@ -199,6 +200,7 @@ def main():
           f"{1e3 * t_all / n:.4f} ms   ARM NumPy single {1e3 * arm_single:.3f} ms, batched {1e3 * arm_batched:.3f} ms")
 
     res = {
+        "dataset": a.dataset,
         "kind": "mlp_board_eval", "time": time.strftime("%Y-%m-%d %H:%M:%S"),
         "pynq_version": getattr(pynq, "__version__", "?"), "cpu": platform.machine(),
         "images": n, "fclk_mhz": fclk, "stream_w": sw, "bits": bits,
