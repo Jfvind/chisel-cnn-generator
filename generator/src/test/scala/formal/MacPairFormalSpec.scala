@@ -46,12 +46,12 @@ class MacPairFormalSpec extends AnyFlatSpec with ChiselScalatestTester with Form
     }
 
     it should "equal two plain Macs for any 8-bit activation and weights" in {
-        Z3.skip.foreach(cancel(_))
+        skipUnlessFormal()
         verify(new MacPairVsMacs(8, 26, 1, oneProduct = true), Seq(BoundedCheck(6)))
     }
 
     it should "equal two plain Macs for any 4-bit inputs, en and clear sequence" in {
-        Z3.skip.foreach(cancel(_))
+        skipUnlessFormal()
         verify(new MacPairVsMacs(4, 12, 1, oneProduct = false), Seq(BoundedCheck(5)))
     }
 }
