@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "parameter_sha256": "ef8be8f340163fe3e9ab309905868beb54c20b8ae51c0792649f0db70e726a26",
+  "samples": 64,
+  "input_features": 784,
+  "output_features": 10
+}
