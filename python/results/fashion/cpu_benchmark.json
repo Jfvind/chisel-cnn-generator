@@ -1,0 +1,15 @@
+{
+  "kind": "cpu_benchmark",
+  "time": "2026-11-25 13:06:36",
+  "host": "Jeppe2024",
+  "cpu": "Intel64 Family 6 Model 186 Stepping 2, GenuineIntel",
+  "cores": 20,
+  "python": "3.12.10",
+  "images": 10000,
+  "dataset": "fashion",
+  "int_batched_ms": 0.13987949999991542,
+  "int_single_ms": 0.15020000137155876,
+  "int_accuracy": 86.07000000000001,
+  "shift_policy": "worst",
+  "bits": 8
+}

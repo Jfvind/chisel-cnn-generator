@@ -1,13 +1,14 @@
 """Time the MLP on this computer's CPU, for comparison with the FPGA (dashboard "Python vs hardware").
 
-    python -m scripts.benchmark_cpu            (from python/, or `make cpu-bench` from the repo root)
+    python -m scripts.benchmark_cpu --dataset fashion   (from python/, or `make cpu-bench DATASET=fashion`)
 
-Measures, on the 10,000 MNIST test images:
+Measures, on the 10,000 test images of --dataset (mnist, fashion or kmnist):
   float  : the trained PyTorch model (float32)
   integer: the bit-exact integer reference (NumPy, int64) on Scala's export, the same
            numbers the FPGA computes
 each as accuracy, time per image one at a time (latency) and time per image in one batch
-(throughput). Writes results/cpu_benchmark.json. Without PyTorch only the integer part runs.
+(throughput). Writes results/cpu_benchmark.json (results/<dataset>/ for Fashion and KMNIST).
+Without PyTorch only the integer part runs.
 """
 
 import argparse
@@ -26,6 +27,8 @@ PYTHON_DIR = pathlib.Path(__file__).resolve().parents[1]
 DATA_DIR = PYTHON_DIR / "data"
 RESULTS_DIR = PYTHON_DIR / "results"
 QUANTIZED_DIR = PYTHON_DIR.parent / "generator/generated/quantized"
+# --dataset -> the folder torchvision downloads it to, as in train_model.DATASETS
+RAW_FOLDERS = {"mnist": "MNIST", "fashion": "FashionMNIST", "kmnist": "KMNIST"}
 
 
 def read_idx(path):
@@ -50,12 +53,16 @@ def per_image(fn, items, repeat=1):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--quantized-dir", type=pathlib.Path, default=QUANTIZED_DIR)
+    ap.add_argument("--dataset", choices=RAW_FOLDERS, default="mnist")
+    ap.add_argument("--quantized-dir", type=pathlib.Path, help="default: the committed export of --dataset")
     ap.add_argument("--single", type=int, default=1000, help="images timed one at a time")
-    ap.add_argument("--out", type=pathlib.Path, default=RESULTS_DIR / "cpu_benchmark.json")
+    ap.add_argument("--out", type=pathlib.Path, help="default: results/cpu_benchmark.json, results/<dataset>/... for the others")
     a = ap.parse_args()
+    sub = "" if a.dataset == "mnist" else a.dataset    # MNIST keeps the committed paths
+    quantized_dir = a.quantized_dir or PYTHON_DIR.parent / "generator/generated" / sub / "quantized"
+    out = a.out or RESULTS_DIR / sub / "cpu_benchmark.json"
 
-    raw = DATA_DIR / "MNIST" / "raw"
+    raw = DATA_DIR / RAW_FOLDERS[a.dataset] / "raw"
     imgs = read_idx(raw / "t10k-images-idx3-ubyte.gz").reshape(-1, 784)
     labels = read_idx(raw / "t10k-labels-idx1-ubyte.gz").astype(np.int64)
     x = imgs.astype(np.float32) / 255.0                       # what torchvision's ToTensor gives
@@ -63,10 +70,10 @@ def main():
 
     res = {"kind": "cpu_benchmark", "time": time.strftime("%Y-%m-%d %H:%M:%S"),
            "host": platform.node(), "cpu": platform.processor() or platform.machine(),
-           "cores": os.cpu_count(), "python": platform.python_version(), "images": n}
+           "cores": os.cpu_count(), "python": platform.python_version(), "images": n, "dataset": a.dataset}
 
     # Integer reference (NumPy): the same arithmetic as the FPGA
-    net = load_network(a.quantized_dir)
+    net = load_network(quantized_dir)
     q = quantize_input(x, net["input_bits"])
     t0 = time.perf_counter()
     scores = infer(q, net)
@@ -79,10 +86,10 @@ def main():
     # Float model (PyTorch)
     try:
         import torch
-        from .train_model import ACTIVATION, OUTPUT_WEIGHTS_FILE, build_model
+        from .train_model import ACTIVATION, build_model, model_dir
         sizes = [net["layers"][0]["in_features"]] + [l["out_features"] for l in net["layers"]]
         model = build_model(sizes, ACTIVATION)
-        model.load_state_dict(torch.load(OUTPUT_WEIGHTS_FILE, weights_only=True, map_location="cpu"))
+        model.load_state_dict(torch.load(model_dir(a.dataset) / "mlp_weights.pt", weights_only=True, map_location="cpu"))
         model.eval()
         xt = torch.from_numpy(x)
         with torch.no_grad():
@@ -97,13 +104,13 @@ def main():
     except ImportError:
         print("PyTorch not installed: float model skipped")
 
-    a.out.parent.mkdir(parents=True, exist_ok=True)
-    a.out.write_text(json.dumps(res, indent=2) + "\n")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(res, indent=2) + "\n")
     for key in ("float", "int"):
         if f"{key}_accuracy" in res:
             print(f"{key:>5}: {res[f'{key}_accuracy']:.2f} %   single {res[f'{key}_single_ms']:.4f} ms/image   "
                   f"batched {res[f'{key}_batched_ms']:.5f} ms/image")
-    print(f"wrote {a.out}")
+    print(f"wrote {out}")
 
 
 if __name__ == "__main__":
