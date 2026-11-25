@@ -5,6 +5,7 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import scala.util.Random
 
+import activation.Activation
 import model.{LayerParams, NetworkModel, QuantizationConfig}
 import service.{WeightExporter, WeightLoader}
 import shell.AccelConfig
@@ -137,7 +138,7 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
         val actMx = (1L << bits) - 1                              // largest activation: 255, 63 or 15
         val vMax = 1 << (bits - 1)                                // weights lie in [-vMax, vMax - 1]: 128, 32 or 8
         val sizes = Seq.fill(rnd.nextInt(3) + 2)(rnd.nextInt(16) + 1)
-        val accW  = 2 * bits + chisel3.util.log2Ceil(sizes.init.max)    // MlpCore: Bits * 2 + log2Ceil(maxIn)
+        val accW  = Activation.sumWidth(bits, sizes.init.max)         // MlpCore's accumulator width
         val lim   = (1L << (accW - 1)) - 1
         NetworkModel(sizes.zip(sizes.tail).zipWithIndex.map { case ((in, out), k) =>
             val w = Seq.fill(in)(Seq.fill(out)(rnd.nextInt(2 * vMax) - vMax))
@@ -236,6 +237,47 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
         val net = WeightLoader.load(dir)
         val sv  = circt.stage.ChiselStage.emitSystemVerilog(new MlpCore(AccelConfig(core = "mlp", streamW = 8), net))
         assert("\\$readmemh".r.findAllIn(sv).length == 128, "one initialised weight bank per lane")
+    }
+
+    // 12 -> 3 -> 2: three stream words per image (4 pixels per word), so a packet can be too short or too long
+    val threeWords = {
+        val rnd = new Random(1)
+        NetworkModel(Seq(
+            LayerParams(0, Seq.fill(12)(Seq.fill(3)(rnd.nextInt(9) - 4)), Seq(5, -5, 0), 4),
+            LayerParams(1, Seq.fill(3)(Seq.fill(2)(rnd.nextInt(9) - 4)), Seq(1, 2), 0)
+        ))
+    }
+
+    it should "flag a short packet, zero-fill the image and end the batch at its TLAST" in {
+        val net = threeWords
+        test(new MlpCore(cfgFor(net), net)) { dut =>
+            val x = Seq.tabulate(12)(k => 20 * k + 7)
+            dut.io.args(0).poke(2.U)                                  // a batch of 2, but TLAST comes in image 1
+            dut.io.start.poke(true.B); dut.clock.step(); dut.io.start.poke(false.B)
+            val r = stream(dut, pack(x).take(2), 2, None)             // word 3 missing, TLAST on word 2
+            assert(r.out == reference(net, x.take(8) ++ Seq.fill(4)(0)), "missing pixels count as 0")
+            assert(r.lasts == Seq(1), "the short image ends the batch: TLAST on its last beat")
+            assert(r.dones == 1, "done once")
+            dut.io.err.expect(true.B, "too few words must raise the packet error")
+            dut.io.busy.expect(false.B, "idle after the short image")
+            dut.io.args(0).poke(0.U)
+            assert(checkImage(dut, net, x, None).out == reference(net, x), "CTRL start clears the error, next run is clean")
+        }
+    }
+
+    it should "flag a long packet and drain the extra words up to TLAST" in {
+        val net = threeWords
+        test(new MlpCore(cfgFor(net), net)) { dut =>
+            val x = Seq.tabulate(12)(k => 255 - 13 * k)
+            dut.io.args(0).poke(1.U)
+            dut.io.start.poke(true.B); dut.clock.step(); dut.io.start.poke(false.B)
+            val extra = Seq(BigInt("deadbeef", 16), BigInt("12345678", 16))
+            val r = stream(dut, pack(x) ++ extra, 2, None)            // 2 extra words, TLAST on the last one
+            assert(r.out == reference(net, x), "the extra words must not reach the computation")
+            assert(r.lasts == Seq(1), "TLAST on the last beat")
+            dut.io.err.expect(true.B, "too many words must raise the packet error")
+            assert(checkImage(dut, net, x.reverse, None).out == reference(net, x.reverse), "next run is clean after CTRL start")
+        }
     }
 
     it should "restart cleanly on CTRL start after an aborted image" in {

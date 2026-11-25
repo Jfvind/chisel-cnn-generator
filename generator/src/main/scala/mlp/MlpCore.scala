@@ -2,11 +2,8 @@ package mlp
 
 import chisel3._
 import chisel3.util._
-import chisel3.util.experimental.loadMemoryFromFileInline
-import java.io.File
-import java.nio.file.Files
 
-import activation.Activation
+import activation.{Activation, ActivationArray}
 import mac.{Mac, MacArray, MacPair}
 import model.NetworkModel
 import shell.{AccelConfig, AccelCore}
@@ -14,53 +11,62 @@ import shell.{AccelConfig, AccelCore}
 // =============================================================================
 // MlpCore.scala — fully connected network on one shared column of MACs.
 //
-// N = widest layer lanes. Lane n = weight bank n + Mac n + bias n + Activation n and computes
-// neuron n of whichever layer is running; the same lanes are reused for every layer.
+// Structure (FSM with datapath)
+//   MlpCore         : the controller. State machine run -> sum -> finish -> run (next layer) / output -> run
+//                     (next image), the layer / input / image counters, and the wiring below.
+//   StreamReader    : unpacks K pixels per clock from the input stream, checks the packet length (TLAST).
+//   WeightBanks     : one weight memory per lane, written from the network at elaboration (bank_<n>.hex).
+//   MacArray        : N lanes multiply-accumulate K inputs per clock.
+//   ActivationArray : N x ReLU, >> shift, clamp at the end of a hidden layer.
+//   OutputArgmax    : sends the logits as stream beats and tracks the argmax -> RESULT.
 //
-// Per layer, K inputs per clock (K = the largest of 4, 2, 1 that divides the pixels per stream word when two
-// lanes share a DSP, else of 2, 1; see "Multipliers" below):
-// inputs Ki..Ki+K-1 are broadcast to all lanes, lane n reads their K weights from one bank row and
-// accumulates sum_j a[Ki+j] * w[Ki+j][n]. Layer 0 takes its inputs straight from the stream (never
-// stored), later layers read the activation registers written by the layer before.
-// End of a layer: hidden layer -> acc + bias -> ReLU, >> shift, clamp -> activation registers;
-// last layer -> raw acc + bias (no ReLU, like train_model.py) -> logit registers -> argmax -> RESULT,
-// and nOut beats out on io.out (logits saturated to streamW, TLAST on the last one).
-// Widths come from net.quantization (Mac and Activation use one width for weights and activations).
-// OVF_COUNT = hidden activations that saturated since the last CTRL start (0 with shift policy "worst").
+// Lanes
+//   N = widest layer. Lane n = weight bank n + Mac n + bias n + Activation n and computes neuron n
+//   of whichever layer is running; the same lanes are reused for every layer.
 //
-// Weight bank layout (one SyncReadMem per lane, initialised from bank_<n>.hex at elaboration):
-//   row layerBase(l) + i = w_l[Ki + j][n] in bits j*Bits, j < K,  layerBase(l) = sum of ceil(in/K)
-//   of the layers before l; 0 when lane n is unused in layer l or Ki + j is past the layer's inputs.
-//   MNIST 784 -> 128 -> 10, K = 4: 228 rows x 32 bits per lane.
+// Dataflow (per layer, K inputs per clock)
+//   Inputs Ki..Ki+K-1 are broadcast to all lanes; lane n reads their K weights from one bank row and
+//   accumulates sum_j a[Ki+j] * w[Ki+j][n]. Layer 0 takes its inputs straight from the stream (never
+//   stored); later layers read the activation registers written by the layer before.
+//   End of a hidden layer: acc + bias -> ReLU, >> shift, clamp -> activation registers.
+//   End of the last layer: raw acc + bias (no ReLU, like train_model.py) -> logit registers -> OutputArgmax.
+//   Widths come from net.quantization (Mac and Activation use one width for weights and activations).
+//   OVF_COUNT = hidden activations that saturated since the last CTRL start (0 with shift policy "worst").
 //
-// Multipliers: with Bits <= 8, lanes 2m and 2m+1 share one DSP48E1 per input (MacPair: a * (w1 * 2^16 + w0)
-// gives both products), so N lanes x K inputs need N / 2 * K DSPs. MNIST, K = 4: 64 x 4 = 256 multipliers.
+// Multipliers
+//   With Bits <= 8, lanes 2m and 2m+1 share one DSP48E1 per input (MacPair: a * (w1 * 2^16 + w0) gives
+//   both products), so N lanes x K inputs need N / 2 * K DSPs. MNIST, K = 4: 64 x 4 = 256 multipliers.
 //
-// Pipeline: bank read (1 cycle) + bank output register (1 cycle), the input is registered twice to meet
-// its weight; the MACs multiply two cycles after the read is issued, and the product is in the accumulator
-// Mac.Latency = 3 cycles after that (multiply, sum of the K products, accumulate: one per clock).
+// Pipeline
+//   WeightBanks latency 2 (read + output register); the input is registered twice to meet its weight.
+//   The MACs multiply two cycles after the read is issued, and the product is in the accumulator
+//   Mac.Latency = 3 cycles after that (multiply, sum of the K products, accumulate: one per clock).
 //
-// Cycles at full speed (stream never stalls): first s_axis beat at cycle 0, last m_axis beat at
-// cycle  sum_l (ceil(in_l / K) + 6) + nOut - 1   (ceil(in_l / K) reads, 2 cycles to the last multiply,
-// 2 to the last accumulate, sum + finish per layer). MNIST, K = 4: (196 + 6) + (32 + 6) + 10 - 1 = 249.
+// Timing at full speed (stream never stalls)
+//   First s_axis beat at cycle 0, last m_axis beat at cycle  sum_l (ceil(in_l / K) + 6) + nOut - 1
+//   (ceil(in_l / K) reads, 2 cycles to the last multiply, 2 to the last accumulate, sum + finish per layer).
+//   MNIST, K = 4: (196 + 6) + (32 + 6) + 10 - 1 = 249.
 // =============================================================================
 
 class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
+    import MlpCore.pick
+
     val q       = net.quantization
     require(q.weightBits == q.activationBits,
         s"MlpCore needs equal weight/activation widths (Mac, Activation), got ${q.weightBits}/${q.activationBits}")
-    val Bits    = q.activationBits                     // weight and activation width
+    val Bits    = q.activationBits                      // weight and activation width
     val layers  = net.layers
-    val N       = layers.map(_.outFeatures).max
-    val maxIn   = layers.map(_.inFeatures).max
-    val accW    = Bits * 2 + log2Ceil(maxIn)         // same width as Activation(Bits, maxIn).sumMaxSize
-    val ppb     = cfg.pixelsPerBeat                    // pixels per stream word (e.g. 32 / 8 = 4)
-    require(ppb >= 1 && ppb * Bits <= cfg.streamW,
+    val N       = layers.map(_.outFeatures).max         // Number of neurons in the biggest layer
+    val maxIn   = layers.map(_.inFeatures).max          // Most weights per neuron in any layer (= most inputs)
+    val accW    = Activation.sumWidth(Bits, maxIn)      // accumulator width
+    val ppb     = cfg.pixelsPerBeat                     // pixels per stream word (e.g. 32 / 8 = 4)
+    require(ppb * Bits <= cfg.streamW,
         s"pixelsPerBeat $ppb x $Bits bit does not fit a ${cfg.streamW}-bit stream word")
-    val pack    = MacPair.fits(Bits)                   // two lanes per DSP (MacPair)
-    val maxK    = if (pack) 4 else 2                   // 128 lanes: 64 x 4 packed or 128 x 2 = 256 multipliers
-    val K       = (maxK to 1 by -1).find(ppb % _ == 0).get   // inputs per clock; must divide ppb so a group never spans two words
+    val pack    = MacPair.fits(Bits)                    // two lanes per DSP (MacPair)
+    val maxK    = if (pack) 4 else 2                    // 128 lanes: 64 x 4 packed or 128 x 2 = 256 multipliers
+    val K       = (maxK to 1 by -1).find(ppb % _ == 0).get   // must divide ppb so a group never spans two words
     val groups  = layers.map(l => (l.inFeatures + K - 1) / K)   // bank rows (and clocks) per layer
+    val layerBase = groups.scanLeft(0)(_ + _)           // first bank row of each layer; last element = total rows
 
     // --- Checks at elaboration ---
     require(layers.head.inFeatures == cfg.nIn, s"cfg.nIn ${cfg.nIn} != network input ${layers.head.inFeatures}")
@@ -69,217 +75,150 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     for (l <- layers)
         require(l.shift < accW, s"Layer ${l.index}: shift ${l.shift} does not fit the ${accW}-bit sum")
 
-    // --- Weight banks, hardcoded from the network ---
-    val layerBase = groups.scanLeft(0)(_ + _)              // last element = total rows
-    val depth     = layerBase.last
-    val hexDir    = new File(f"generated/mlp-${net.hashCode}%08x").getAbsoluteFile   // absolute: Vivado's $readmemh must find it
-    hexDir.mkdirs()
-    val banks = Seq.tabulate(N) { n =>
-        val rows = layers.zip(groups).flatMap { case (l, g) =>
-            l.weights.map(row => if (n < l.outFeatures) row(n) else 0).padTo(g * K, 0).grouped(K)
-        }
-        val file = new File(hexDir, s"bank_$n.hex")
-        val digits = (K * Bits + 3) / 4              // two's complement per weight: -2 @ 8 bit -> "fe"; weight j in bits j*Bits
-        Files.write(file.toPath, rows.map { r =>
-            val word = r.zipWithIndex.map { case (w, j) => BigInt(w & ((1 << Bits) - 1)) << (j * Bits) }.sum
-            String.format(s"%0${digits}x", word.bigInteger)
-        }.mkString("", "\n", "\n").getBytes)
-        val mem = SyncReadMem(depth, UInt((K * Bits).W))   // stored as raw bits; a SInt memory loads "fe" as 254 in treadle
-        // forward slashes: a Windows path "C:\Users\..." inside a Verilog string would be read as escape sequences
-        loadMemoryFromFileInline(mem, file.getAbsolutePath.replace('\\', '/'))
-        mem
-    }
-
-    // --- Batching input images ---
-    val batch = RegInit(1.U(32.W))              // Images pr batch. Default: 1
-    val img   = RegInit(0.U(32.W))              // Image index in the batch
-    when (io.start) {
-        batch := Mux(io.args(0) === 0.U, 1.U, io.args(0))
-    }
-    val lastImage = img === batch - 1.U
-
-    // --- Packet check: the stream's TLAST must come with the last word of the batch's last image ---
-    val shortPkt = RegInit(false.B)                           // TLAST came early: rest of this image is zeros, batch ends here
-    val longPkt  = RegInit(false.B)                           // no TLAST at the expected end: extra words follow
-    val draining = RegInit(false.B)                           // discarding extra words until TLAST
-    val endBatch = lastImage || shortPkt                      // the image being processed is the batch's last
-
-    // --- Control state ---
-    // run -> sum (acc + bias into registers) -> finish (activation or logits) -> run / output
+    // --- Control registers ---
     object State extends ChiselEnum { val run, sum, finish, output = Value }
-    val state   = RegInit(State.run)
-    val layer   = RegInit(0.U(log2Ceil(layers.length max 2).W))
-    val i       = RegInit(0.U(log2Ceil(maxIn max N max 2).W))  // input index within the layer
-    val drained = RegInit(false.B)                              // last input issued, waiting for the MAC
-    val o       = RegInit(0.U(log2Ceil(cfg.nOut max 2).W))      // output beat index
+    import State._
+    val stateReg   = RegInit(run)
+    val layerReg   = RegInit(0.U(log2Ceil(layers.length max 2).W))
+    val iReg       = RegInit(0.U(log2Ceil(maxIn max N max 2).W))  // input group index within the layer
+    val drainedReg = RegInit(false.B)                              // last input issued, waiting for the MAC
+    val batchReg   = RegInit(1.U(32.W))                            // images per batch (ARG0, 0 -> 1)
+    val imgReg     = RegInit(0.U(32.W))                            // image index in the batch
+    when(io.start) {
+        batchReg := Mux(io.args(0) === 0.U, 1.U, io.args(0))
+    }
+    val lastImage = imgReg === batchReg - 1.U
 
-    val act    = Reg(Vec(N, UInt(Bits.W)))                      // activation registers (hidden layers)
-    val logits = Reg(Vec(cfg.nOut, SInt(accW.W)))               // logit registers (last layer)
-    val sumReg = Reg(Vec(N, SInt(accW.W)))                      // pipeline: acc + bias is one cycle before activation
-    val result = RegInit(0.U(32.W))
+    // --- Datapath registers ---
+    val actReg    = Reg(Vec(N, UInt(Bits.W)))                      // activation registers (hidden layers)
+    val logitsReg = Reg(Vec(cfg.nOut, SInt(accW.W)))               // logit registers (last layer)
+    val sumReg    = Reg(Vec(N, SInt(accW.W)))                      // pipeline: acc + bias is one cycle before activation
 
-    val inLast    = pick(groups.map(g => (g - 1).U), layer)
-    val base      = pick(layerBase.init.map(_.U(log2Ceil(depth max 2).W)), layer)
-    val shift     = pick(layers.map(_.shift.U(log2Ceil(accW).W)), layer)
-    val lastLayer = layer === (layers.length - 1).U
+    // Per-layer constants, selected by the current layer
+    val inLast    = pick(groups.map(g => (g - 1).U), layerReg)
+    val base      = pick(layerBase.init.map(_.U(log2Ceil(layerBase.last max 2).W)), layerReg)
+    val shift     = pick(layers.map(_.shift.U(log2Ceil(accW).W)), layerReg)
+    val bias      = VecInit.tabulate(N)(n => pick(layers.map(l => (if (n < l.outFeatures) l.bias(n) else 0).S(accW.W)), layerReg))
+    val lastLayer = layerReg === (layers.length - 1).U
 
-    // --- Input: K pixels per clock from ppb per stream word (lowest bits = first pixel); later layers from the activation registers ---
-    val gpw        = ppb / K                                    // K-pixel groups per word: 4 / 4 = 1
-    val word       = Reg(UInt(cfg.streamW.W))                   // the word being unpacked
-    val have       = RegInit(0.U(log2Ceil(gpw + 1).W))          // groups left in `word`
-    val fromStream = layer === 0.U
-    val canIssue   = state === State.run && !drained
-    val inValid    = io.in.valid && !draining                 // the core never sees words that are being drained
-    val zeroFill   = shortPkt && have === 0.U                 // after an early TLAST: missing pixels are 0
-    val pixValid   = have =/= 0.U || inValid || zeroFill
-    val grp        = Mux(have =/= 0.U, word, Mux(zeroFill, 0.U, io.in.bits.data))
-    val pixels     = VecInit.tabulate(K)(j => grp(j * Bits + Bits - 1, j * Bits))
-    val takeWord   = canIssue && fromStream && have === 0.U && !shortPkt
-    io.in.ready   := takeWord || draining
-    val issue      = canIssue && (!fromStream || pixValid)
-    // act in groups of K; the tail is padded with 0 (its weights are 0 too)
-    val actGroups  = VecInit(act.padTo((N + K - 1) / K * K, 0.U(Bits.W)).grouped(K).map(g => VecInit(g.toSeq)).toSeq)
-    val actIdx     = if (actGroups.length == 1) 0.U else i(log2Ceil(actGroups.length) - 1, 0)
-    val a          = Mux(fromStream, pixels, actGroups(actIdx))
-
+    // --- Input: layer 0 from the stream (StreamReader), later layers from the activation registers ---
+    val fromStream = layerReg === 0.U
+    val canIssue   = stateReg === run && !drainedReg
     // which group index fetches the last word of an image (784 pixels, 4 per word, K = 4 -> word 195 = group 195)
-    val lastWordAt = (((layers.head.inFeatures - 1) / ppb) * gpw).U
-    val wordIn     = takeWord && io.in.valid                  // a word for the core was taken this cycle
-    when(wordIn) {
-        val expectEnd = lastImage && i === lastWordAt
-        when(io.in.bits.last && !expectEnd) { shortPkt := true.B }                    // too few words
-        when(!io.in.bits.last && expectEnd) { longPkt := true.B; draining := true.B } // too many words
-    }
-    when(draining && io.in.valid && io.in.bits.last) { draining := false.B }          // extra words gone
-
-    when(issue && fromStream) {
-        val endOfImage = i === inLast                         // the rest of a partly used word is padding
-        when(have === 0.U && !zeroFill) {                     // took group 0 straight from the stream
-            word := io.in.bits.data >> (K * Bits)
-            have := Mux(endOfImage, 0.U, (gpw - 1).U)
-        }.elsewhen(have =/= 0.U) {
-            word := word >> (K * Bits)
-            have := Mux(endOfImage, 0.U, have - 1.U)
-        }
-    }
+    val lastWordAt = (((layers.head.inFeatures - 1) / ppb) * (ppb / K)).U
+    val reader = Module(new StreamReader(cfg.streamW, Bits, K, ppb))
+    reader.io.in         <> io.in
+    reader.io.start      := io.start
+    reader.io.req        := canIssue && fromStream
+    reader.io.endOfImage := iReg === inLast
+    reader.io.expectEnd  := lastImage && iReg === lastWordAt
+    val endBatch   = lastImage || reader.io.short                 // the image being processed is the batch's last
+    val issue      = canIssue && (!fromStream || reader.io.valid)
+    // act in groups of K (128 -> 32 groups of 4); the tail is padded with 0 (its weights are 0 too)
+    val actPadded  = actReg.padTo((N + K - 1) / K * K, 0.U(Bits.W))
+    val actGroups  = VecInit(actPadded.grouped(K).map(g => VecInit(g.toSeq)).toSeq)
+    val actIdx     = if (actGroups.length == 1) 0.U else iReg(log2Ceil(actGroups.length) - 1, 0)
+    val a          = Mux(fromStream, reader.io.pixels, actGroups(actIdx))
 
     when(issue) {
-        i := Mux(i === inLast, 0.U, i + 1.U)
-        when(i === inLast) { drained := true.B }
+        iReg := Mux(iReg === inLast, 0.U, iReg + 1.U)
+        when(iReg === inLast) { drainedReg := true.B }
     }
 
     // One pipeline stage for a valid/control bit; CTRL start empties it, so nothing from an
     // aborted image reaches the MACs or the state machine after a restart
     def stage(b: Bool): Bool = RegNext(b && !io.start, false.B)
 
-    // --- MAC column, one cycle behind the issue (bank read latency) ---
+    // --- Weights and MAC column: the MACs get row base + i two cycles after the issue (WeightBanks latency) ---
+    val banks = Module(new WeightBanks(net, N, K, Bits, groups))
+    banks.io.addr := base + iReg
+    banks.io.en   := issue
     val macs = Module(new MacArray(Bits, N, accW, K, pack))
-    for (n <- 0 until N) {
-        val row = RegNext(banks(n).read(base + i, issue))
-        macs.io.w(n) := VecInit.tabulate(K)(j => row(j * Bits + Bits - 1, j * Bits).asSInt)
-    }
-    macs.io.a     := RegNext(RegNext(a))                                 // pipeline register
+    macs.io.w     := banks.io.w
+    macs.io.a     := RegNext(RegNext(a))                           // input registered twice to meet its weight
     macs.io.en    := stage(stage(issue))
-    macs.io.clear := false.B
-    val lastInAcc = (0 until 1 + Mac.Latency).foldLeft(issue && i === inLast)((b, _) => stage(b))
-    when(lastInAcc) { state := State.sum }               // last product is in acc now (2 to the MACs + Mac.Latency - 1)
+    // last product is in acc: 1 + Mac.Latency stages (not ShiftRegister: CTRL start must flush it)
+    val lastInAccReg = (0 until 1 + Mac.Latency).foldLeft(issue && iReg === inLast)((b, _) => stage(b))
 
-    // --- sum: acc + bias into registers ---
-    when(state === State.sum) {
-        for (n <- 0 until N) {
-            val bias = pick(layers.map(l => (if (n < l.outFeatures) l.bias(n) else 0).S(accW.W)), layer)
-            sumReg(n) := macs.io.acc(n) + bias
-        }
-        macs.io.clear := true.B
-        drained       := false.B
-        state         := State.finish
-    }
-
-    // --- End of layer: activation from registered sum (hidden) or raw logits (last layer) ---
-    val units = sumReg.map { s =>
-        val u = Module(new Activation(Bits, maxIn))
-        u.io.sum   := s
-        u.io.shift := shift
-        u
-    }
+    // --- Activation column: ReLU, >> shift, clamp of the registered sums ---
+    val acts = Module(new ActivationArray(Bits, N, maxIn))
+    acts.io.sum   := sumReg
+    acts.io.shift := shift
 
     // OVF_COUNT: saturated hidden activations since the last CTRL start (unused lanes have sum 0, never clamp)
-    val ovf = RegInit(0.U(32.W))
-    val ovfFlags = RegNext(VecInit(units.map(_.io.clamped)))
-    val ovfValid = stage(state === State.finish && !lastLayer)
-    val ovfInc   = RegNext(PopCount(ovfFlags))
-    val ovfAdd   = stage(ovfValid)
+    // two register stages: clamp flags -> PopCount -> add to ovf
+    val ovfReg      = RegInit(0.U(32.W))
+    val ovfFlagsReg = RegNext(acts.io.clamped)
+    val ovfValidReg = stage(stateReg === finish && !lastLayer)
+    val ovfIncReg   = RegNext(PopCount(ovfFlagsReg))
+    val ovfAddReg   = stage(ovfValidReg)
     when(io.start) {
-        ovf := 0.U
-    }.elsewhen(ovfAdd) {
-        ovf := ovf + ovfInc
+        ovfReg := 0.U
+    }.elsewhen(ovfAddReg) {
+        ovfReg := ovfReg + ovfIncReg
     }
 
-    when(state === State.finish) {
-        when(lastLayer) {
-            for (k <- 0 until cfg.nOut) logits(k) := sumReg(k)
-            state  := State.output
-        }.otherwise {
-            for (n <- 0 until N) act(n) := units(n).io.act
-            layer := layer + 1.U
-            state := State.run
+    // --- Output: nOut logits, TLAST on the last one, argmax -> RESULT ---
+    val outs = Module(new OutputArgmax(cfg.nOut, accW, cfg.streamW))
+    outs.io.logits   := logitsReg
+    outs.io.valid    := stateReg === output
+    outs.io.endBatch := endBatch
+    outs.io.start    := io.start
+    io.out           <> outs.io.out
+
+    // --- State machine ---
+    macs.io.clear := false.B
+    switch(stateReg) {
+        is(run) {                               // issue inputs; after the last one, wait for the pipeline to empty
+            when(lastInAccReg) { stateReg := sum }
+        }
+        is(sum) {                               // acc + bias into registers, clear the MACs for the next layer
+            for (n <- 0 until N) sumReg(n) := macs.io.acc(n) + bias(n)
+            macs.io.clear := true.B
+            drainedReg    := false.B
+            stateReg      := finish
+        }
+        is(finish) {
+            when(lastLayer) {                   // raw logits, no ReLU
+                for (k <- 0 until cfg.nOut) logitsReg(k) := sumReg(k)
+                stateReg := output
+            }.otherwise {                       // ReLU, >> shift, clamp into the activation registers
+                actReg   := acts.io.act
+                layerReg := layerReg + 1.U
+                stateReg := run
+            }
+        }
+        is(output) {
+            when(outs.io.lastFire) {            // last score sent: next image of the batch, or idle
+                imgReg   := Mux(endBatch, 0.U, imgReg + 1.U)
+                layerReg := 0.U
+                stateReg := run
+            }
         }
     }
 
-    // --- Output: nOut logits, TLAST on the last one ---
-    val cur      = pick(logits, o)
-    val bestVal  = Reg(SInt(accW.W))
-    val bestIdx  = Reg(UInt(32.W))
-    val isBetter = o === 0.U || cur > bestVal           // Only greater. lowest index wins ties
-    val lastBeat = o === (cfg.nOut - 1).U               // Last score of this image
-    io.out.valid     := state === State.output
-    io.out.bits.data := saturate(cur)
-    io.out.bits.last := lastBeat && endBatch
-    when(io.out.fire) {
-        when(isBetter) { bestVal := cur; bestIdx := o }
-        o := Mux(lastBeat, 0.U, o + 1.U)
-        when(lastBeat) { 
-            result := Mux(isBetter, o, bestIdx)     // RESULT valid the cycle after done
-            img    := Mux(endBatch, 0.U, img + 1.U)
-            state  := State.run
-            layer  := 0.U                           // ready for the next input 
-        }
-    }
-
-    // --- CTRL start: every run begins from a clean state, also after an aborted batch ---
+    // --- CTRL start: every run begins from a clean state, also after an aborted batch (last: overrides the FSM) ---
     when(io.start) {
-        state         := State.run
-        layer         := 0.U
-        i             := 0.U
-        drained       := false.B
-        o             := 0.U
-        img           := 0.U
-        have          := 0.U                             // drops a half-used stream word; `word` is then unused
-        macs.io.clear := true.B                          // partial sums of an aborted image
-        shortPkt      := false.B
-        longPkt       := false.B
-        draining      := false.B
+        stateReg      := run
+        layerReg      := 0.U
+        iReg          := 0.U
+        drainedReg    := false.B
+        imgReg        := 0.U
+        macs.io.clear := true.B                 // partial sums of an aborted image
     }
-
 
     io.done   := io.out.fire && io.out.bits.last
-    io.result := result
-    io.busy   := !(state === State.run && layer === 0.U && i === 0.U && !drained)
-    io.ovf    := ovf
-    io.err    := shortPkt || longPkt
+    io.result := outs.io.result
+    io.busy   := !(stateReg === run && layerReg === 0.U && iReg === 0.U && !drainedReg)
+    io.ovf    := ovfReg
+    io.err    := reader.io.err
+}
+
+// Helpers shared by MlpCore and its datapath modules
+object MlpCore {
+    // The k bits-wide fields of a packed word, field 0 in the lowest bits
+    def fields(x: UInt, k: Int, bits: Int): Vec[UInt] = VecInit.tabulate(k)(j => x(j * bits + bits - 1, j * bits))
 
     // xs(idx) for a per-layer (or per-beat) constant; a one-element Vec takes no index bits
     def pick[T <: Data](xs: Seq[T], idx: UInt): T = if (xs.length == 1) xs.head else VecInit(xs)(idx)
-
-    // Two's complement in streamW bits, clamped when the logit does not fit
-    def saturate(s: SInt): UInt = {
-        val w = cfg.streamW
-        if (w >= accW) s.pad(w).asUInt
-        else {
-            val hi = ((BigInt(1) << (w - 1)) - 1).S(accW.W)
-            val lo = (-(BigInt(1) << (w - 1))).S(accW.W)
-            val clamped = Mux(s > hi, hi, Mux(s < lo, lo, s)).asUInt
-            clamped(w - 1, 0)
-        }
-    }
 }
