@@ -110,7 +110,7 @@ Expected board output ends with `ALL PASSED`. The overlay and `smoke_test.py` al
 | Offset | Name | Access | Meaning |
 |---|---|---|---|
 | 0x00 | CTRL | W | bit0 start (pulse), bit1 soft-reset core |
-| 0x04 | STATUS | R | bit0 busy, bit1 done (sticky, cleared by start) |
+| 0x04 | STATUS | R | bit0 busy, bit1 done (sticky, cleared by start), bit2 packet-length error (cleared by start) |
 | 0x08 | ID | R | 0xDEADBEEF (`AccelConfig.id`) |
 | 0x0C | CFG_HASH | R | must equal `cfg_hash` in hw_manifest.json |
 | 0x10 / 0x14 | N_IN / N_OUT | R | packet sizes |
@@ -122,9 +122,10 @@ Expected board output ends with `ALL PASSED`. The overlay and `smoke_test.py` al
 
 ## The MLP core
 
-`MlpCore` (`generator/src/main/scala/mlp/`) runs the whole network on one column of MACs, one per
-neuron of the widest layer; layer 0 consumes the pixels straight from the stream. 925 cycles per image
-for 784 -> 128 -> 10 at full speed.
+`MlpCore` (`generator/src/main/scala/mlp/`) runs the whole network on one column of 128 MACs, one per
+neuron of the widest layer, and takes 4 pixels per clock; layer 0 consumes the pixels straight from the
+stream. For 784 -> 128 -> 10, `CYCLES` reads 249 for one image (first pixel to last score); in a batch
+the next image follows right after, about 250 cycles per image.
 
 ```bash
 make board CORE=mlp                         # 32-bit beats: 784 pixels in, 10 signed scores out

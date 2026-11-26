@@ -39,7 +39,7 @@
 
 % ---------------------------------------------------------------- PS contents
 \node[ps, minimum width=6cm, minimum height=2.6cm] (arm) at (4,9.6)
-  {\textbf{ARM Cortex-A9} (650 MHz)\\[2pt]\scriptsize Linux + Python: smoke\_test.py, accel.py\\\scriptsize PYNQ drivers: MMIO, DMA, allocate};
+  {\textbf{ARM Cortex-A9} (650 MHz)\\[2pt]\scriptsize Linux + Python: accel.py,\\\scriptsize smoke\_test.py, mlp\_test.py\\\scriptsize PYNQ drivers: MMIO, DMA, allocate};
 \node[ps, minimum width=6cm, minimum height=1.3cm] (cache) at (4,6.1)
   {\textbf{L1/L2 caches + DDR controller}\\\scriptsize HP0 bypasses the caches $\Rightarrow$ flush() / invalidate()};
 \node[ps, minimum width=6cm, minimum height=2.6cm] (ddr) at (4,2.4)
@@ -69,7 +69,7 @@
   {\textbf{AXI DMA}\\\scriptsize (simple mode)\\[4pt]\scriptsize MM2S: memory $\to$ stream\\\scriptsize S2MM: stream $\to$ memory\\[4pt]\scriptsize S\_AXI\_LITE: control regs\\\scriptsize (address, length, status)};
 
 \node[acc, minimum width=4.4cm, minimum height=8.2cm] (accel) at (24.8,6.0)
-  {\textbf{accel}\\\scriptsize (accel\_top $\to$ AccelShell)\\[6pt]\scriptsize s\_axi: CTRL, STATUS,\\\scriptsize ARG0--3, CYCLES, RESULT\\[6pt]\textbf{\small Core}\\\scriptsize MlpCore now, CNN later\\[6pt]\scriptsize s\_axis in / m\_axis out};
+  {\textbf{accel}\\\scriptsize (accel\_top $\to$ AccelShell)\\[6pt]\scriptsize s\_axi: CTRL, STATUS,\\\scriptsize ARG0--3, CYCLES, RESULT\\[6pt]\textbf{\small Core}\\\scriptsize MlpCore\\[6pt]\scriptsize s\_axis in / m\_axis out};
 
 % ---------------------------------------------------------------- control paths (blue)
 \draw[c] (arm.east |- 0,10.2) -- (gpic.west |- 0,10.2);
