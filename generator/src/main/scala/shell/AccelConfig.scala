@@ -2,14 +2,15 @@ package shell
 
 import java.nio.file.Paths
 
+import mlp.Parallelism
 import model.NetworkModel
 import service.QuantizedReader
 
 // =============================================================================
 // AccelConfig.scala — the single source of truth shared by Chisel, Vivado and PYNQ.
 //
-// AccelConfig : case class with core name, nIn, nOut, streamW, addrW, fclkMhz,
-//               plus the ID magic number and a hash of the config so the driver can
+// AccelConfig : case class with core name, nIn, nOut, streamW, addrW, fclkMhz, the MLP parallelism
+//               (inputsPerClock, multiplier, dspBudget; see mlp/Parallelism.scala), plus the ID magic number and a hash of the config so the driver can
 //               detect a bitstream/manifest mismatch.
 // RegMap      : fixed AXI-Lite register map (byte offsets), identical for every core.
 //               See hw/README.md for the table.
@@ -24,11 +25,17 @@ case class AccelConfig(
     fclkMhz: Int = 100,             // PL clock requested from Zynq PS
     quantizedDir: String = "generated/quantized",   // mlp: export from `make reference`, relative to generator/
     paramHash: Long = 0,                             // set by resolve: the weights are part of CFG_HASH
-    pixelsPerBeat: Int = 1                          // set by resolve: input pixels packed per stream word (mlp: streamW / activation bits)
+    pixelsPerBeat: Int = 1,                         // set by resolve: input pixels packed per stream word (mlp: streamW / activation bits)
+    inputsPerClock: Int = 0,                        // mlp: inputs per lane per clock, 0 = chosen by resolve
+    multiplier: String = "auto",                    // mlp: "packed" (two lanes per DSP), "single" or "auto" = chosen by resolve
+    dspBudget: Int = 0                              // mlp: most multipliers the core may build, 0 = no limit
 ) {
     // checks at elaboration
     require(Seq(8, 16, 32, 64).contains(streamW), s"streamW must be 8/16/32/64, got $streamW")
     require(addrW >= 8 && addrW <= 16, s"addrW must be 8-16, got $addrW")
+    require(inputsPerClock >= 0, s"inputsPerClock must be positive or 0 (auto), got $inputsPerClock")
+    require(Parallelism.Multipliers.contains(multiplier), s"multiplier must be auto, packed or single, got $multiplier")
+    require(dspBudget >= 0, s"dspBudget must be positive or 0 (no limit), got $dspBudget")
 
     // Magic ID to check if correct bitstream is loaded
     val id: Long = 0xDEADBEEFL
@@ -45,14 +52,17 @@ object AccelConfig {
     // manifest the driver reads describes what the hardware really does.
     // stub: returns one output beat per input beat, so nOut must equal nIn.
     // mlp:  nIn/nOut come from the network, and the weights go into CFG_HASH, so a bitstream
-    //       built from other weights is caught by the driver's hash check.
+    //       built from other weights is caught by the driver's hash check. inputsPerClock and multiplier
+    //       are fixed to what Parallelism chooses, so the manifest and CFG_HASH name the built hardware.
     def resolve(cfg: AccelConfig): AccelConfig = cfg.core match {
         case "stub" => cfg.copy(nOut = cfg.nIn)
         case "mlp"  =>
             val net = network(cfg)
-            cfg.copy(nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures,
+            val sized = cfg.copy(nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures,
                      paramHash = net.hashCode.toLong & 0xFFFFFFFFL, 
                      pixelsPerBeat = (cfg.streamW / net.quantization.activationBits) max 1) // must match MlpCore ppb
+            val choice = Parallelism.choose(sized, net)
+            sized.copy(inputsPerClock = choice.inputsPerClock, multiplier = choice.multiplier)
         case _      => cfg
     }
 }

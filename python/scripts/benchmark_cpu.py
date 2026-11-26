@@ -1,6 +1,6 @@
 """Time the MLP on this computer's CPU, for comparison with the FPGA (dashboard "Python vs hardware").
 
-    python -m scripts.benchmark_cpu --dataset fashion   (from python/, or `make cpu-bench DATASET=fashion`)
+    python -m scripts.benchmark_cpu --dataset fashion --hidden 64,32   (from python/, or `make cpu-bench DATASET=fashion HIDDEN=64,32`)
 
 Measures, on the 10,000 test images of --dataset (mnist, fashion or kmnist):
   float  : the trained PyTorch model (float32)
@@ -54,11 +54,16 @@ def per_image(fn, items, repeat=1):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dataset", choices=RAW_FOLDERS, default="mnist")
+    ap.add_argument("--hidden", default="128", help="hidden layer widths of the model, e.g. 64,32 (default 128)")
     ap.add_argument("--quantized-dir", type=pathlib.Path, help="default: the committed export of --dataset")
     ap.add_argument("--single", type=int, default=1000, help="images timed one at a time")
     ap.add_argument("--out", type=pathlib.Path, help="default: results/cpu_benchmark.json, results/<dataset>/... for the others")
     a = ap.parse_args()
-    sub = "" if a.dataset == "mnist" else a.dataset    # MNIST keeps the committed paths
+    hidden = [int(part) for part in a.hidden.split(",") if part.strip()]
+    # MNIST keeps the committed paths; other hidden widths get hidden-<widths>/, as train_model.model_dir
+    sub = pathlib.Path("" if a.dataset == "mnist" else a.dataset)
+    if hidden != [128]:
+        sub = sub / ("hidden-" + "-".join(map(str, hidden)))
     quantized_dir = a.quantized_dir or PYTHON_DIR.parent / "generator/generated" / sub / "quantized"
     out = a.out or RESULTS_DIR / sub / "cpu_benchmark.json"
 
@@ -89,7 +94,7 @@ def main():
         from .train_model import ACTIVATION, build_model, model_dir
         sizes = [net["layers"][0]["in_features"]] + [l["out_features"] for l in net["layers"]]
         model = build_model(sizes, ACTIVATION)
-        model.load_state_dict(torch.load(model_dir(a.dataset) / "mlp_weights.pt", weights_only=True, map_location="cpu"))
+        model.load_state_dict(torch.load(model_dir(a.dataset, hidden) / "mlp_weights.pt", weights_only=True, map_location="cpu"))
         model.eval()
         xt = torch.from_numpy(x)
         with torch.no_grad():
