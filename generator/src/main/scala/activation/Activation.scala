@@ -3,8 +3,13 @@ package activation
 import chisel3._
 import chisel3.util._
 
+object Activation {
+  // Width of a sum of `activations` products of two width-bit numbers
+  def sumWidth(width: Int, activations: Int): Int = width * 2 + log2Ceil(activations)
+}
+
 class Activation(width: Int, activations: Int) extends Module {
-  val sumMaxSize = width * 2 + log2Ceil(activations)
+  val sumMaxSize = Activation.sumWidth(width, activations)
   val actMax     = ((BigInt(1) << width) - 1).U(width.W)
 
   val io = IO(new Bundle {
