@@ -10,8 +10,8 @@ import service.QuantizedReader
 // AccelConfig.scala — the single source of truth shared by Chisel, Vivado and PYNQ.
 //
 // AccelConfig : case class with core name, nIn, nOut, streamW, addrW, fclkMhz, the MLP parallelism
-//               (inputsPerClock, multiplier, dspBudget; see mlp/Parallelism.scala), plus the ID magic number and a hash of the config so the driver can
-//               detect a bitstream/manifest mismatch.
+//               (inputsPerClock, multiplier, dspBudget; see mlp/Parallelism.scala), plus the ID magic
+//               number and a hash of the config so the driver can detect a bitstream/manifest mismatch.
 // RegMap      : fixed AXI-Lite register map (byte offsets), identical for every core.
 //               See hw/README.md for the table.
 // =============================================================================
@@ -53,7 +53,8 @@ object AccelConfig {
     // stub: returns one output beat per input beat, so nOut must equal nIn.
     // mlp:  nIn/nOut come from the network, and the weights go into CFG_HASH, so a bitstream
     //       built from other weights is caught by the driver's hash check. inputsPerClock and multiplier
-    //       are fixed to what Parallelism chooses, so the manifest and CFG_HASH name the built hardware.
+    //       are fixed to what Parallelism chooses and dspBudget is cleared once it has been applied, so the
+    //       manifest and CFG_HASH name the built hardware: the same hardware always gets the same hash.
     def resolve(cfg: AccelConfig): AccelConfig = cfg.core match {
         case "stub" => cfg.copy(nOut = cfg.nIn)
         case "mlp"  =>
@@ -62,7 +63,7 @@ object AccelConfig {
                      paramHash = net.hashCode.toLong & 0xFFFFFFFFL, 
                      pixelsPerBeat = (cfg.streamW / net.quantization.activationBits) max 1) // must match MlpCore ppb
             val choice = Parallelism.choose(sized, net)
-            sized.copy(inputsPerClock = choice.inputsPerClock, multiplier = choice.multiplier)
+            sized.copy(inputsPerClock = choice.inputsPerClock, multiplier = choice.multiplier, dspBudget = 0)
         case _      => cfg
     }
 }

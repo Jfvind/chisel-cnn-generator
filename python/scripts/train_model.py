@@ -1,6 +1,7 @@
 # in: --dataset (mnist, fashion or kmnist) images and labels, --hidden layer widths, training settings
 # out: trained checkpoint (.pt), float weight/bias CSVs, printed test accuracy, in python/models/ (MNIST) or
 #      python/models/<dataset>/, and in a hidden-<widths>/ subfolder when --hidden is not the default 128
+#      (hidden-none for --hidden none, no hidden layer)
 # Trains a float MLP and exports its parameters for the Scala loader.
 
 import argparse
@@ -35,14 +36,26 @@ def model_dir(dataset, hidden=DEFAULT_HIDDEN):
     Other hidden widths get a hidden-<widths>/ subfolder (hidden-64-32), the same rule as SUBDIR in the Makefile,
     so a new architecture never overwrites the committed model the Scala tests are built on."""
     folder = PYTHON_DIR / "models" if dataset == "mnist" else PYTHON_DIR / "models" / dataset
-    return folder if list(hidden) == DEFAULT_HIDDEN else folder / ("hidden-" + "-".join(map(str, hidden)))
+    return folder if list(hidden) == DEFAULT_HIDDEN else folder / ("hidden-" + hidden_name(hidden))
+
+
+def hidden_name(hidden):
+    """[64, 32] -> '64-32', [] -> 'none': the folder name and the only spelling parse_hidden accepts (with commas)."""
+    return "-".join(map(str, hidden)) if hidden else "none"
 
 
 def parse_hidden(text):
-    """'64,32' -> [64, 32]; an empty string means no hidden layer (inputs straight to the classes)."""
-    widths = [int(part) for part in text.split(",") if part.strip()]
+    """'64,32' -> [64, 32], 'none' -> [] (inputs straight to the classes). Any other spelling of the same widths
+    ('064', '64,32,', '64, 32') is rejected, because the Makefile names the folder from the text as given."""
+    try:
+        widths = [] if text == "none" else [int(part) for part in text.split(",")]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"hidden widths must be comma separated integers or none, got '{text}'")
     if any(width < 1 for width in widths):
-        raise argparse.ArgumentTypeError(f"hidden widths must be positive, got {text}")
+        raise argparse.ArgumentTypeError(f"hidden widths must be positive, got '{text}'")
+    canonical = "none" if not widths else ",".join(map(str, widths))
+    if text != canonical:
+        raise argparse.ArgumentTypeError(f"write the hidden widths as '{canonical}', got '{text}'")
     return widths
 
 
@@ -61,7 +74,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train the float MLP and export its weights as CSVs")
     parser.add_argument("--dataset", choices=DATASETS, default="mnist")
     parser.add_argument("--hidden", type=parse_hidden, default=DEFAULT_HIDDEN,
-                        help="hidden layer widths, comma separated, e.g. 128 or 64,32 (default 128)")
+                        help="hidden layer widths, comma separated, e.g. 128 or 64,32, or none (default 128)")
     args = parser.parse_args()
     dataset = args.dataset
     layer_sizes = [INPUTS, *args.hidden, CLASSES]

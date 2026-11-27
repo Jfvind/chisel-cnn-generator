@@ -75,5 +75,7 @@ class ParallelismTest extends AnyFlatSpec {
         val budget = AccelConfig.resolve(AccelConfig(core = "mlp", quantizedDir = "generated/quantized", dspBudget = 220))
         assert(budget.inputsPerClock == 2 && budget.multiplier == "packed")
         assert(budget.cfgHash != resolved.cfgHash, "other hardware -> other CFG_HASH")
+        val fixed = AccelConfig.resolve(AccelConfig(core = "mlp", quantizedDir = "generated/quantized", inputsPerClock = 2, multiplier = "packed"))
+        assert(budget.cfgHash == fixed.cfgHash, "the same hardware gets the same CFG_HASH, whatever budget chose it")
     }
 }

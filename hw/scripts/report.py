@@ -161,6 +161,9 @@ def summarize(b):
     u, t, p, m = b["util"], b["timing"], b["params"], b["manifest"]
     s = {"core": m.get("core") or p.get("CORE") or "?", "stream_w": m.get("stream_w") or p.get("STREAM_W"),
          "n_in": m.get("n_in"), "n_out": m.get("n_out")}
+    # MLP parallelism from the manifest, e.g. "packed x 4": multiplier form and inputs per lane per clock
+    s["parallelism"] = (f'{m["multiplier"]} x {m["inputs_per_clock"]}'
+                        if m.get("multiplier") and m.get("inputs_per_clock") else None)
     fclk = m.get("fclk_mhz") or p.get("FCLK_MHZ")
     period = t["clocks"][0]["period"] if t["clocks"] else (1000.0 / float(fclk) if fclk else None)
     s["fclk"] = float(fclk) if fclk else (t["clocks"][0]["mhz"] if t["clocks"] else None)
@@ -483,6 +486,7 @@ def chips(b):
     items = [("core", s["core"]), ("stream", f'{s["stream_w"]} bit' if s["stream_w"] else None),
              ("in → out", f'{s["n_in"]} → {s["n_out"]}' if s["n_in"] else None),
              ("clock", f'{fmt(s["fclk"], 0)} MHz' if s["fclk"] else None),
+             ("MACs", s["parallelism"]),
              ("device", m.get("Device")), ("state", m.get("Design State")), ("built", m.get("Date"))]
     return '<div class="chips">' + "".join(
         f'<span class="chip">{esc(k)} <b>{esc(v)}</b></span>' for k, v in items if v) + "</div>"
@@ -502,7 +506,7 @@ def run_section(b, title_tag="h1", cpu=None):
 def compare_table(builds):
     def pct(t):
         return fmt(t[2], 1, "%") if t else "–"
-    head = ("<tr><th>Build</th><th>Core</th><th>Clock</th><th>WNS</th><th>Est. Fmax</th><th>LUTs</th>"
+    head = ("<tr><th>Build</th><th>Core</th><th>MACs</th><th>Clock</th><th>WNS</th><th>Est. Fmax</th><th>LUTs</th>"
             "<th>FFs</th><th>BRAM</th><th>DSP</th><th>Accel LUTs</th><th>Accel BRAM36</th>"
             "<th>Board acc.</th><th>Accel / image</th></tr>")
     rows = ""
@@ -510,7 +514,8 @@ def compare_table(builds):
         s = b["summary"]
         cls = "ok" if s["met"] else "bad" if s["met"] is False else "muted"
         acc = s["accel"] or {}
-        rows += (f'<tr><td>{esc(b["name"])}</td><td>{esc(s["core"])}</td><td>{fmt(s["fclk"], 0)} MHz</td>'
+        rows += (f'<tr><td>{esc(b["name"])}</td><td>{esc(s["core"])}</td><td>{esc(s["parallelism"] or "–")}</td>'
+                 f'<td>{fmt(s["fclk"], 0)} MHz</td>'
                  f'<td><span class="pill {cls}">{fmt(s["wns"], 3)}</span></td><td>{fmt(s["fmax"], 0)}</td>'
                  f'<td>{pct(s["lut"])}</td><td>{pct(s["ff"])}</td><td>{pct(s["bram"])}</td><td>{pct(s["dsp"])}</td>'
                  f'<td>{fmt(acc.get("Total LUTs"))}</td><td>{fmt(acc.get("RAMB36"))}</td>'

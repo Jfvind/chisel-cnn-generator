@@ -37,7 +37,8 @@ ARGS     ?=
 FCLK_MHZ ?= 100
 # MLP parallelism (see mlp/Parallelism.scala): inputs multiplied per lane per clock (1, 2, 4, ... dividing the
 # pixels per stream word, or auto), multiplier form (packed: two lanes per DSP, single: one, or auto) and the
-# most multipliers the build may use (0 = no limit; 220 = the DSP48E1 slices of the PYNQ-Z2)
+# most MAC multipliers the core may build, counted as one DSP48E1 each (0 = no limit; the PYNQ-Z2 has 220 DSPs,
+# which only bounds the MAC array: DSPs Vivado infers elsewhere are not counted)
 INPUTS_PER_CLOCK ?= auto
 MULTIPLIER       ?= auto
 DSP_BUDGET       ?= 0
@@ -68,11 +69,19 @@ else
     SUBDIR := /$(DATASET)
 endif
 
-# Hidden layer widths of the trained MLP, comma separated: make train HIDDEN=64,32
+# Hidden layer widths of the trained MLP, comma separated: make train HIDDEN=64,32 (HIDDEN=none: no hidden layer)
 # The default 128 keeps the committed paths; other widths get their own hidden-<widths>/ folders
-# (python/models/hidden-64-32/csv, python/models/fashion/hidden-64-32/csv), the same rule as train_model.model_dir
+# (python/models/hidden-64-32/csv, python/models/fashion/hidden-64-32/csv), the same rule as train_model.model_dir.
+# Spaces and stray commas are removed here, so "64, 32," names the same folder as 64,32; train_model.py
+# rejects any other spelling (064), so Make and Python can never pick different folders.
 HIDDEN ?= 128
 comma  := ,
+empty  :=
+space  := $(empty) $(empty)
+override HIDDEN := $(subst $(space),$(comma),$(strip $(subst $(comma),$(space),$(HIDDEN))))
+ifeq ($(HIDDEN),)
+    $(error HIDDEN is empty. Give the hidden widths, e.g. HIDDEN=64,32, or HIDDEN=none for no hidden layer)
+endif
 ifneq ($(HIDDEN),128)
     SUBDIR := $(SUBDIR)/hidden-$(subst $(comma),-,$(HIDDEN))
 endif

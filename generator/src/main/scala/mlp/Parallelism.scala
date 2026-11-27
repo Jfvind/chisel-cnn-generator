@@ -14,7 +14,11 @@ share one multiplier per input (MacPair, possible when 3 x bits fits the 25-bit 
     ceil(lanes / 2) x inputsPerClock   multipliers when packed
     lanes x inputsPerClock             multipliers when single
 
-The PYNQ-Z2 has 220 DSP48E1 slices; Vivado builds the multipliers beyond that from LUTs.
+The PYNQ-Z2 has 220 DSP48E1 slices; Vivado builds the multipliers beyond that from LUTs. The DSP budget counts
+these MAC multipliers only, one DSP48E1 each. That matches the routed 784-128-10 build, where all 220 DSPs sit in
+the MAC array (README.md, resource table), but it is not a promise about the whole design: a DSP that Vivado
+infers elsewhere is not counted, and the single form has not yet been checked in a Vivado build to take exactly
+one DSP per multiplier.
 
 inputsPerClock has to divide the pixels per stream word, so a group of inputs never spans two words. Each of the
 two settings is either fixed by the user (AccelConfig.inputsPerClock > 0, AccelConfig.multiplier "packed" or

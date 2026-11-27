@@ -30,6 +30,12 @@ object ShellGen extends App {           // App provides args from CLI
         if (i >= 0 && i + 1 < args.length) args(i+1) else default
     }
 
+    // A whole number for --name, or a message naming the flag instead of a NumberFormatException
+    private def intArgOr(name: String, default: String, allowed: String): Int = {
+        val text = argOr(name, default)
+        text.toIntOption.getOrElse(throw new IllegalArgumentException(s"--$name must be $allowed, got '$text'"))
+    }
+
     val requested = AccelConfig(
         core    = argOr("core", "stub"),
         nIn     = argOr("nIn", "784").toInt,
@@ -38,9 +44,10 @@ object ShellGen extends App {           // App provides args from CLI
         addrW   = argOr("addrW", "12").toInt,
         fclkMhz = argOr("fclkMhz", "100").toInt,
         quantizedDir = argOr("quantizedDir", "generated/quantized"),
-        inputsPerClock = argOr("inputsPerClock", "auto") match { case "auto" => 0; case n => n.toInt },
+        inputsPerClock = if (argOr("inputsPerClock", "auto") == "auto") 0
+                         else intArgOr("inputsPerClock", "auto", "auto or a whole number of inputs per clock"),
         multiplier = argOr("multiplier", "auto"),
-        dspBudget = argOr("dspBudget", "0").toInt
+        dspBudget = intArgOr("dspBudget", "0", "a whole number of multipliers (0 = no limit)")
     )
     val cfg = AccelConfig.resolve(requested)       // core-specific rules (stub: nOut = nIn)
     if (cfg != requested) println(s"[ShellGen] adjusted for core '${cfg.core}': $requested -> $cfg")
