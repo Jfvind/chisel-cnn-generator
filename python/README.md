@@ -17,7 +17,7 @@ python/
 
 ## Setup
 
-From this directory, with Python 3.10+:
+From this directory, with Python 3.12+:
 
 ```sh
 python3 -m venv venv

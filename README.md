@@ -21,7 +21,7 @@ scores as our integer reference, bit for bit, and classifies an MNIST digit in 2
 - **Formal proof** (`make formal`): z3 as well, `pip install z3-solver` on Windows and macOS or
   `sudo apt-get install z3` on Linux. The proof takes several minutes, so it is not part of `make test`;
   run it on its own with `make formal`.
-- **Python parts** (training, the Python cross-check, PC timing): Python 3.10 or newer with the packages
+- **Python parts** (training, the Python cross-check, PC timing): Python 3.12 or newer with the packages
   in `python/requirements.txt`, see [python/README.md](python/README.md#setup).
 - **Hardware:** Vivado and a PYNQ-Z2 on the network. The one-time board setup is in
   [hw/README.md](hw/README.md#prerequisites-checked-2026-10-14). On Windows, install GNU make (for example
@@ -32,6 +32,12 @@ scores as our integer reference, bit for bit, and classifies an MNIST digit in 2
 Run the commands from the repository root. Steps 1 and 2 need Java, sbt and Python, steps 3 and 4
 need Vivado, and step 5 needs the board.
 
+0. **Set up Python** (needed for step 1): Python 3.12 or newer. From the repository root:
+   ```
+   python -m venv venv          # python3 on Linux
+   source venv/bin/activate     # PowerShell: .\venv\Scripts\activate  Git Bash: source venv/Scripts/activate
+   python -m pip install -r python/requirements.txt
+   ```
 1. **Train the network** (optional, the trained weights are in the repository): `make train`.
    PyTorch trains the 784-128-10 MLP and writes the float weights to `python/models/csv`.
 2. **Quantize and check the accuracy:** `make reference`. Scala turns the weights into integers,
@@ -116,7 +122,7 @@ These are set on the `make` command line, for example `make board CORE=mlp DATAS
 
 | Parameter | Default | What it changes |
 |---|---|---|
-| `CORE` | `stub` | Which core goes into the shell: `stub` (test core) or `mlp` |
+| `CORE` | `stub` | Which core goes into the shell: `mlp` for the accelerator, or `stub`, a test core that sends its input back, used to test the shell on the board. Always `mlp` for real use |
 | `DATASET` | `mnist` | Which dataset is trained and tested on: `mnist`, `fashion` or `kmnist`. All three are 28x28 images with 10 classes |
 | `WEIGHT_BITS`, `ACTIVATION_BITS` | 8, 8 | Bit width of weights and activations. The MLP core needs the two to be equal |
 | `BIAS_BITS` | 32 | Bit width of the biases |
