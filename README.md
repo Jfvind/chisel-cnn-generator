@@ -88,6 +88,36 @@ foreach ($b in 1, 10, 100, 1000, 2000) {
 }
 ```
 
+## Generator parameters
+
+The hardware is generated from two things: the trained network and a few build settings. Most sizes
+are not set by hand but read from the quantized network (`network.json`), so a different network gives
+different hardware without any change to the Chisel code.
+
+These are set on the `make` command line, for example `make board CORE=mlp DATASET=fashion`:
+
+| Parameter | Default | What it changes |
+|---|---|---|
+| `CORE` | `stub` | Which core goes into the shell: `stub` (test core) or `mlp` |
+| `DATASET` | `mnist` | Which dataset is trained and tested on: `mnist`, `fashion` or `kmnist`. All three are 28x28 images with 10 classes |
+| `WEIGHT_BITS`, `ACTIVATION_BITS` | 8, 8 | Bit width of weights and activations. The MLP core needs the two to be equal |
+| `BIAS_BITS` | 32 | Bit width of the biases |
+| `SHIFT_POLICY` | `worst` | How far the sum is shifted after a hidden layer. `worst` never clamps; `typical` keeps more precision but may clamp large sums, which `OVF_COUNT` counts |
+| `WEIGHTS` | `python/models/csv` | Which trained float weights to build from |
+| `STREAM_W` | 32 | Width of the AXI-Stream in bits: 8, 16, 32 or 64 |
+| `FCLK_MHZ` | 100 | Clock frequency of the FPGA part |
+
+The generator works out the rest itself:
+
+| Value | How it is found | MNIST |
+|---|---|---|
+| Inputs and outputs | First and last layer of the network | 784, 10 |
+| Lanes | Neurons in the widest layer | 128 |
+| Pixels per stream word | `STREAM_W` / activation bits | 4 |
+| Inputs per clock | Up to 4 with `MacPair` (8 bits or less), up to 2 without. Must divide the pixels per word | 4 |
+| Accumulator width | 2 x bits + log2 of the largest number of inputs | 26 |
+| Rows in each weight memory | Sum over the layers of inputs / inputs per clock, rounded up | 196 + 32 = 228 |
+
 ## Architecture and interfaces
 
 ### From training to the board
@@ -216,37 +246,7 @@ first input word as clock 0, the last score leaves on clock
 In a batch the next image starts right after, so each image takes about 250 clocks, or 2.5 µs at
 100 MHz.
 
-## Generator parameters
-
-The hardware is generated from two things: the trained network and a few build settings. Most sizes
-are not set by hand but read from the quantized network (`network.json`), so a different network gives
-different hardware without any change to the Chisel code.
-
-These are set on the `make` command line, for example `make board CORE=mlp DATASET=fashion`:
-
-| Parameter | Default | What it changes |
-|---|---|---|
-| `CORE` | `stub` | Which core goes into the shell: `stub` (test core) or `mlp` |
-| `DATASET` | `mnist` | Which dataset is trained and tested on: `mnist`, `fashion` or `kmnist`. All three are 28x28 images with 10 classes |
-| `WEIGHT_BITS`, `ACTIVATION_BITS` | 8, 8 | Bit width of weights and activations. The MLP core needs the two to be equal |
-| `BIAS_BITS` | 32 | Bit width of the biases |
-| `SHIFT_POLICY` | `worst` | How far the sum is shifted after a hidden layer. `worst` never clamps; `typical` keeps more precision but may clamp large sums, which `OVF_COUNT` counts |
-| `WEIGHTS` | `python/models/csv` | Which trained float weights to build from |
-| `STREAM_W` | 32 | Width of the AXI-Stream in bits: 8, 16, 32 or 64 |
-| `FCLK_MHZ` | 100 | Clock frequency of the FPGA part |
-
-The generator works out the rest itself:
-
-| Value | How it is found | MNIST |
-|---|---|---|
-| Inputs and outputs | First and last layer of the network | 784, 10 |
-| Lanes | Neurons in the widest layer | 128 |
-| Pixels per stream word | `STREAM_W` / activation bits | 4 |
-| Inputs per clock | Up to 4 with `MacPair` (8 bits or less), up to 2 without. Must divide the pixels per word | 4 |
-| Accumulator width | 2 x bits + log2 of the largest number of inputs | 26 |
-| Rows in each weight memory | Sum over the layers of inputs / inputs per clock, rounded up | 196 + 32 = 228 |
-
-### Hardware usage (MNIST)
+## Hardware usage (MNIST)
 
 MNIST MLP 784-128-10, 8-bit, on the PYNQ-Z2 (xc7z020) at 100 MHz, after routing (WNS +0.297 ns).
 128 lanes x 4 inputs per clock = 512 multiply-accumulates per clock, 249 cycles per image.
