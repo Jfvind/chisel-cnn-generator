@@ -21,7 +21,8 @@ scores as our integer reference, bit for bit, and classifies an MNIST digit in 2
 - **Python parts** (training, the Python cross-check, PC timing): Python 3.10 or newer with the packages
   in `python/requirements.txt`, see [python/README.md](python/README.md#setup).
 - **Hardware:** Vivado and a PYNQ-Z2 on the network. The one-time board setup is in
-  [hw/README.md](hw/README.md#prerequisites-checked-2026-10-14). On Windows, use Git Bash with GNU make.
+  [hw/README.md](hw/README.md#prerequisites-checked-2026-10-14). On Windows, install GNU make (for example
+  with winget); the commands work from PowerShell and Git Bash.
 
 ### Run MNIST on the FPGA, step by step
 
