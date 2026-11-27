@@ -91,6 +91,20 @@ foreach ($b in 1, 10, 100, 1000, 2000) {
 }
 ```
 
+### Camera demo
+
+`pynq/camera_demo.py` classifies digits held up in front of a USB webcam plugged into the board. It
+uses the same MLP bitstream: the ARM turns each camera frame into a 28x28 MNIST-style image and sends
+it to the FPGA like any test image.
+
+```bash
+make board CORE=mlp   # once: build the MLP into hw/vivado
+make camera           # live loop on the board, Ctrl-C stops
+```
+
+How each frame is prepared, tips for good results and the board setup are in
+[docs/camera-demo.md](docs/camera-demo.md).
+
 ## Generator parameters
 
 The hardware is generated from two things: the trained network and a few build settings. Most sizes
@@ -366,20 +380,6 @@ We have only built one network size for the board, 784-128-10. The generator tak
 the simulations run random networks, but we have not built a larger network on the FPGA. How the
 hardware usage grows with the size of the network, and how large a network fits on the Zynq-7020, is
 therefore the biggest open question.
-
-## Camera demo
-
-`pynq/camera_demo.py` classifies digits held up in front of a USB webcam plugged into the board. It
-uses the same MLP bitstream: the ARM turns each camera frame into a 28x28 MNIST-style image and sends
-it to the FPGA like any test image.
-
-```bash
-make board CORE=mlp   # once: build the MLP into hw/vivado
-make camera           # live loop on the board, Ctrl-C stops
-```
-
-How each frame is prepared, tips for good results and the board setup are in
-[docs/camera-demo.md](docs/camera-demo.md).
 
 ## Limitations
 
