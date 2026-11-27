@@ -147,7 +147,7 @@ end-to-end:
 test:
 	cd generator && $(SBT) test
 
-# Formal checks only (need z3 on PATH; `make test` runs them too, or skips them without z3)
+# Formal proof only (needs z3 on PATH). FORMAL=1 turns it on; `make test` skips it
 formal: export FORMAL = 1
 formal:
 	cd generator && $(SBT) "testOnly formal.*"
