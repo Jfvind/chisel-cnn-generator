@@ -104,7 +104,7 @@ These are set on the `make` command line, for example `make board CORE=mlp DATAS
 | `BIAS_BITS` | 32 | Bit width of the biases |
 | `SHIFT_POLICY` | `worst` | How far the sum is shifted after a hidden layer. `worst` never clamps; `typical` keeps more precision but may clamp large sums, which `OVF_COUNT` counts |
 | `WEIGHTS` | `python/models/csv` | Which trained float weights and biases to build from |
-| `STREAM_W` | 32 | Width of the AXI-Stream in bits: 8, 16, 32 or 64 |
+| `STREAM_W` | 32 | Width of the AXI-Stream in bits: 8, 16, 32 or 64 (only 32 has been run on the board) |
 | `FCLK_MHZ` | 100 | Clock frequency of the FPGA part |
 
 The generator works out the rest itself:
