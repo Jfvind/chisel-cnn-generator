@@ -23,25 +23,54 @@ scores as our integer reference, bit for bit, and classifies an MNIST digit in 2
 - **Hardware:** Vivado and a PYNQ-Z2 on the network. The one-time board setup is in
   [hw/README.md](hw/README.md#prerequisites-checked-2026-10-14). On Windows, use Git Bash with GNU make.
 
-### Reproduce the results
+### Run MNIST on the FPGA, step by step
 
-Run the commands from the repository root. Each row reproduces one result in this README.
+Run the commands from the repository root. Steps 1 and 2 need Java, sbt and Python, steps 3 and 4
+need Vivado, and step 5 needs the board.
 
-| Result | Command | Where the numbers end up | Needs |
-|---|---|---|---|
-| All Chisel tests | `make test` | Test report in the terminal | Java, sbt |
-| Formal proof of `MacPair` | `make formal` | Test report in the terminal | Java, sbt, z3 |
-| Accuracy, float and integer | `make reference DATASET=mnist` (or `fashion`, `kmnist`) | `python/results/quantization_results.csv`, or `python/results/<dataset>/` | Java, sbt |
-| Python cross-check of the test vectors | `make reference-test` | Test report in the terminal | Java, sbt, Python |
-| PC timing | `make cpu-bench DATASET=mnist` | `python/results/cpu_benchmark.json`, or `python/results/<dataset>/` | Python |
-| Hardware usage | `make bitstream CORE=mlp` | `hw/vivado/reports/dashboard.html` | Vivado |
-| Results on the board | `make board CORE=mlp DATASET=mnist` | `hw/vivado/reports/board_results.json` and the dashboard | Vivado, board |
-| Dashboard with timing, resources and board results | `make report OPEN=1` | Opens `hw/vivado/reports/dashboard.html` | Python |
-| Several builds side by side | Build each one into its own folder with `make bitstream CORE=mlp BUILD=hw/vivado/<name>`, then `make compare BUILDS="hw/vivado/<name1> hw/vivado/<name2>"` | `hw/vivado/compare.html` | Vivado |
-| Time per batch size | The loop below, after `make board CORE=mlp` | `hw/vivado/reports/batch_<n>.json` | Board |
-| Everything for one dataset | `make end-to-end DATASET=fashion` | All of the above | Everything |
+1. **Train the network** (optional, the trained weights are in the repository): `make train`.
+   PyTorch trains the 784-128-10 MLP and writes the float weights to `python/models/csv`.
+2. **Quantize and check the accuracy:** `make reference`. Scala turns the weights into integers,
+   writes them to `generator/generated/quantized`, prints the float and integer accuracy and writes
+   64 test vectors.
+3. **Generate the Verilog:** `make rtl CORE=mlp`. It quantizes the network again into
+   `hw/vivado/quantized` with the same settings, and Chisel writes the hardware to `hw/vivado/rtl/`.
+4. **Build the bitstream:** `make bitstream CORE=mlp`. Vivado writes `hw/vivado/overlay/accel.bit`
+   and the reports to `hw/vivado/reports/`, and stops if the design does not meet the clock.
+5. **Run it on the board:** `make deploy CORE=mlp`. The bitstream and the test files are copied to the
+   board, `mlp_test.py` runs there, and the results come back to `hw/vivado/reports/board_results.json`.
 
-The loop for the time per batch size, in bash:
+`make board CORE=mlp` runs steps 3 to 5 in one go. Add `DATASET=fashion` or `DATASET=kmnist` to use
+another dataset; `make end-to-end DATASET=fashion` runs all five steps plus the PC timing.
+
+### All make commands
+
+Run the commands from the repository root.
+
+| Command | What it does | Output |
+|---|---|---|
+| `make train` | Trains the MLP with PyTorch | `python/models/csv` |
+| `make reference` | Quantizes the weights in Scala, measures float and integer accuracy, writes 64 test vectors | `generator/generated/quantized`, `python/results/quantization_results.csv` |
+| `make reference-test` | Runs `make reference`, then checks the test vectors with the independent Python reference | Terminal |
+| `make test` | Runs all Chisel tests (not the formal proof) | Terminal |
+| `make formal` | Runs the formal proof of `MacPair` (needs z3) | Terminal |
+| `make cpu-bench` | Times the float and integer network on the PC | `python/results/cpu_benchmark.json` |
+| `make rtl CORE=mlp` | Generates the Verilog | `hw/vivado/rtl/` |
+| `make bitstream CORE=mlp` | Runs `make rtl`, then Vivado; stops if timing is not met | `hw/vivado/overlay/accel.bit`, `hw/vivado/reports/` |
+| `make deploy CORE=mlp` | Copies the bitstream and test files to the board and runs the test there | `hw/vivado/reports/board_results.json` |
+| `make board CORE=mlp` | `make bitstream` + `make deploy` | As `bitstream` and `deploy` |
+| `make end-to-end` | `train`, `reference`, `cpu-bench` and `board` for one dataset | All of the above |
+| `make report OPEN=1` | Builds the dashboard from the reports and results and opens it | `hw/vivado/reports/dashboard.html` |
+| `make compare BUILDS="..."` | Shows several builds side by side | `hw/vivado/compare.html` |
+| `make camera` | Runs the webcam demo on the board | Terminal |
+| `make clean` | Deletes the build folder | - |
+| `make help` | Prints the commands and the current settings | Terminal |
+
+Add `DATASET=fashion` or `DATASET=kmnist` to use another dataset. Without `CORE=mlp`, `rtl`, `bitstream`,
+`deploy` and `board` build the `stub` test core.
+
+To reproduce the time per batch size in the Evaluation section, run this loop after `make board CORE=mlp`,
+in bash:
 
 ```bash
 for b in 1 10 100 1000 2000; do
