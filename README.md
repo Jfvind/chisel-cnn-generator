@@ -103,7 +103,7 @@ These are set on the `make` command line, for example `make board CORE=mlp DATAS
 | `WEIGHT_BITS`, `ACTIVATION_BITS` | 8, 8 | Bit width of weights and activations. The MLP core needs the two to be equal |
 | `BIAS_BITS` | 32 | Bit width of the biases |
 | `SHIFT_POLICY` | `worst` | How far the sum is shifted after a hidden layer. `worst` never clamps; `typical` keeps more precision but may clamp large sums, which `OVF_COUNT` counts |
-| `WEIGHTS` | `python/models/csv` | Which trained float weights to build from |
+| `WEIGHTS` | `python/models/csv` | Which trained float weights and biases to build from |
 | `STREAM_W` | 32 | Width of the AXI-Stream in bits: 8, 16, 32 or 64 |
 | `FCLK_MHZ` | 100 | Clock frequency of the FPGA part |
 
