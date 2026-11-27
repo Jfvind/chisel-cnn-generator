@@ -1,7 +1,8 @@
 # chisel-cnn-generator
 > [!NOTE]
-> The project has pivoted to optimizing an MLP accelerator for the time being.
-> Parameterized Chisel generator for MLP inference accelerators on FPGA; the integer reference is checked bit-exact against PyTorch.
+> The long-term goal is a generator for CNN accelerators, hence the name. For now, the repository generates MLP accelerators.
+
+Parameterized Chisel generator for MLP inference accelerators on FPGA; the integer reference is checked bit-exact against PyTorch.
 
 This project is a hardware generator, written in Chisel, that turns a trained neural network into an
 accelerator on an FPGA. We train a small MLP (multilayer perceptron) in PyTorch, convert it to integers
