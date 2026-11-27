@@ -148,6 +148,7 @@ test:
 	cd generator && $(SBT) test
 
 # Formal checks only (need z3 on PATH; `make test` runs them too, or skips them without z3)
+formal: export FORMAL = 1
 formal:
 	cd generator && $(SBT) "testOnly formal.*"
 
