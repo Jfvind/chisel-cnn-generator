@@ -14,7 +14,8 @@ import circt.stage.ChiselStage      // For Verilog
 //   hw_manifest.json   values the PYNQ driver needs (register map, sizes, id, hash)
 //
 // ShellGen : App entry point, parses --out --core --nIn --nOut --streamW --addrW --fclkMhz
-//            (mlp also: --quantizedDir, the export from `make reference`; widths and shifts come from it)
+//            (mlp also: --quantizedDir, the export from `make reference`; widths and shifts come from it;
+//            --inputsPerClock, --multiplier and --dspBudget, "auto"/0 to let mlp.Parallelism choose)
 // Wrapper  : port list + Verilog wrapper text
 // Manifest : shell_params.tcl and hw_manifest.json text
 //
@@ -29,6 +30,12 @@ object ShellGen extends App {           // App provides args from CLI
         if (i >= 0 && i + 1 < args.length) args(i+1) else default
     }
 
+    // A whole number for --name, or a message naming the flag instead of a NumberFormatException
+    private def intArgOr(name: String, default: String, allowed: String): Int = {
+        val text = argOr(name, default)
+        text.toIntOption.getOrElse(throw new IllegalArgumentException(s"--$name must be $allowed, got '$text'"))
+    }
+
     val requested = AccelConfig(
         core    = argOr("core", "stub"),
         nIn     = argOr("nIn", "784").toInt,
@@ -36,7 +43,11 @@ object ShellGen extends App {           // App provides args from CLI
         streamW = argOr("streamW", "32").toInt,
         addrW   = argOr("addrW", "12").toInt,
         fclkMhz = argOr("fclkMhz", "100").toInt,
-        quantizedDir = argOr("quantizedDir", "generated/quantized")
+        quantizedDir = argOr("quantizedDir", "generated/quantized"),
+        inputsPerClock = if (argOr("inputsPerClock", "auto") == "auto") 0
+                         else intArgOr("inputsPerClock", "auto", "auto or a whole number of inputs per clock"),
+        multiplier = argOr("multiplier", "auto"),
+        dspBudget = intArgOr("dspBudget", "0", "a whole number of multipliers (0 = no limit)")
     )
     val cfg = AccelConfig.resolve(requested)       // core-specific rules (stub: nOut = nIn)
     if (cfg != requested) println(s"[ShellGen] adjusted for core '${cfg.core}': $requested -> $cfg")
@@ -138,6 +149,8 @@ object Manifest {
             |  "pixels_per_beat": ${cfg.pixelsPerBeat},
             |  "addr_w": ${cfg.addrW},
             |  "fclk_mhz": ${cfg.fclkMhz},
+            |  "inputs_per_clock": ${cfg.inputsPerClock},
+            |  "multiplier": "${cfg.multiplier}",
             |  "num_args": ${RegMap.NUM_ARGS},
             |  "regs": {
             |$regs

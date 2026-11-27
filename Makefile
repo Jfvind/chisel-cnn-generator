@@ -35,6 +35,13 @@ RUN      ?= $($(CORE)_RUN)
 EXTRA    ?= $($(CORE)_EXTRA)
 ARGS     ?=
 FCLK_MHZ ?= 100
+# MLP parallelism (see mlp/Parallelism.scala): inputs multiplied per lane per clock (1, 2, 4, ... dividing the
+# pixels per stream word, or auto), multiplier form (packed: two lanes per DSP, single: one, or auto) and the
+# most MAC multipliers the core may build, counted as one DSP48E1 each (0 = no limit; the PYNQ-Z2 has 220 DSPs,
+# which only bounds the MAC array: DSPs Vivado infers elsewhere are not counted)
+INPUTS_PER_CLOCK ?= auto
+MULTIPLIER       ?= auto
+DSP_BUDGET       ?= 0
 NAME     ?= accel
 JOBS     ?= 8
 HOST     ?= pynq-direct,pynq
@@ -60,6 +67,23 @@ ifeq ($(DATASET),mnist)
     SUBDIR :=
 else
     SUBDIR := /$(DATASET)
+endif
+
+# Hidden layer widths of the trained MLP, comma separated: make train HIDDEN=64,32 (HIDDEN=none: no hidden layer)
+# The default 128 keeps the committed paths; other widths get their own hidden-<widths>/ folders
+# (python/models/hidden-64-32/csv, python/models/fashion/hidden-64-32/csv), the same rule as train_model.model_dir.
+# Spaces and stray commas are removed here, so "64, 32," names the same folder as 64,32; train_model.py
+# rejects any other spelling (064), so Make and Python can never pick different folders.
+HIDDEN ?= 128
+comma  := ,
+empty  :=
+space  := $(empty) $(empty)
+override HIDDEN := $(subst $(space),$(comma),$(strip $(subst $(comma),$(space),$(HIDDEN))))
+ifeq ($(HIDDEN),)
+    $(error HIDDEN is empty. Give the hidden widths, e.g. HIDDEN=64,32, or HIDDEN=none for no hidden layer)
+endif
+ifneq ($(HIDDEN),128)
+    SUBDIR := $(SUBDIR)/hidden-$(subst $(comma),-,$(HIDDEN))
 endif
 
 # ===========================================================
@@ -102,7 +126,8 @@ RTL_DIR := $(BUILD)/rtl
 OVERLAY := $(BUILD)/overlay/$(NAME).bit
 
 GEN_ARGS = --out ../$(RTL_DIR) --core $(CORE) --nIn $(N_IN) --nOut $(N_OUT) \
-           --streamW $(STREAM_W) --fclkMhz $(FCLK_MHZ) --quantizedDir ../$(BOARD_QUANT_DIR)
+           --streamW $(STREAM_W) --fclkMhz $(FCLK_MHZ) --quantizedDir ../$(BOARD_QUANT_DIR) \
+           --inputsPerClock $(INPUTS_PER_CLOCK) --multiplier $(MULTIPLIER) --dspBudget $(DSP_BUDGET)
 VIVADO_ARGS = -mode batch -nojournal -log $(BUILD)/vivado.log \
               -source hw/scripts/build.tcl -tclargs $(RTL_DIR) $(BUILD) $(NAME) $(JOBS) 0
 EXPORT_ARGS = --weight-bits $(WEIGHT_BITS) --activation-bits $(ACTIVATION_BITS) --bias-bits $(BIAS_BITS) \
@@ -121,6 +146,7 @@ DEPLOY = $(PYTHON) hw/scripts/deploy.py --overlay $(OVERLAY) --host $(HOST) --ru
 help:
 	@echo Targets: train, end-to-end, test, formal, reference, reference-test, rtl, bitstream, deploy, board, clean, report, compare, cpu-bench, camera
 	@echo Config:  CORE=$(CORE) STREAM_W=$(STREAM_W) N_IN=$(N_IN) N_OUT=$(N_OUT) FCLK_MHZ=$(FCLK_MHZ) RUN=$(RUN) ARGS=$(ARGS)
+	@echo MLP:     HIDDEN=$(HIDDEN) INPUTS_PER_CLOCK=$(INPUTS_PER_CLOCK) MULTIPLIER=$(MULTIPLIER) DSP_BUDGET=$(DSP_BUDGET)
 	@echo Quant:   WEIGHT_BITS=$(WEIGHT_BITS) ACTIVATION_BITS=$(ACTIVATION_BITS) BIAS_BITS=$(BIAS_BITS) SHIFT_POLICY=$(SHIFT_POLICY) WEIGHTS=$(WEIGHTS)
 	@echo Data:    DATASET=$(DATASET) DATA_DIR=$(DATA_DIR) QUANT_DIR=$(QUANT_DIR) RESULTS_DIR=$(RESULTS_DIR)
 	@echo Tools:   VIVADO=$(VIVADO) SBT=$(SBT) PYTHON=$(PYTHON)
@@ -129,9 +155,9 @@ help:
 # ==========================================================
 # Training
 # ==========================================================
-# PyTorch trains the float MLP on DATASET -> python/models/csv for MNIST, python/models/<dataset>/csv otherwise
+# PyTorch trains the float MLP (784 -> HIDDEN -> 10) on DATASET -> $(WEIGHTS)
 train:
-	cd python && $(PYTHON) -m scripts.train_model --dataset $(DATASET)
+	cd python && $(PYTHON) -m scripts.train_model --dataset $(DATASET) --hidden $(HIDDEN)
 
 # Everything for one dataset, in order: train -> reference -> cpu-bench -> board (needs Vivado and the board)
 # make end-to-end DATASET=fashion. DATASET is passed on to every step, and a failing step stops the chain
@@ -198,7 +224,7 @@ compare:
 # Time PyTorch (float) and the NumPy integer reference on this PC on DATASET -> RESULTS_DIR/cpu_benchmark.json
 # (the dashboard's "Python vs hardware" card puts it next to the board results)
 cpu-bench:
-	cd python && $(PYTHON) -m scripts.benchmark_cpu --dataset $(DATASET)
+	cd python && $(PYTHON) -m scripts.benchmark_cpu --dataset $(DATASET) --hidden $(HIDDEN)
 
 
 # =========================================================

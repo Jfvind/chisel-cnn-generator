@@ -213,6 +213,8 @@ def main():
         "hw_wall_ms": 1e3 * float(np.median(walls)),            # latency: one image end-to-end
         "latency_images": k_lat,
         "batch": a.batch, "pixels_per_beat": ppb,
+        # MAC parallelism of the build (mlp/Parallelism.scala); absent in overlays built before it was a setting
+        "inputs_per_clock": m.get("inputs_per_clock"), "multiplier": m.get("multiplier"),
         "cycles_per_image_batched": batch_cycles / n,           # images back to back in hardware
         "hw_batched_ms": 1e3 * t_all / n,                       # throughput: wall time per image in batches
         "hw_total_s": t_all,                                    # all n images in batches

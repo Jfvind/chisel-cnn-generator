@@ -48,15 +48,20 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
 
     def argmax(xs: Seq[Long]): Int = xs.indexOf(xs.max)
 
-    def cfgFor(net: NetworkModel, streamW: Int = 32) =
+    // inputsPerClock 0 and multiplier "auto" leave the choice to Parallelism, as an unset Makefile does
+    def cfgFor(net: NetworkModel, streamW: Int = 32, inputsPerClock: Int = 0, multiplier: String = "auto") =
         AccelConfig(core = "mlp", nIn = net.layers.head.inFeatures, nOut = net.layers.last.outFeatures,
-                    streamW = streamW, pixelsPerBeat = ppbFor(net.quantization.activationBits, streamW))
+                    streamW = streamW, pixelsPerBeat = ppbFor(net.quantization.activationBits, streamW),
+                    inputsPerClock = inputsPerClock, multiplier = multiplier)
 
     // Fixed cycles at full speed: sum_l (ceil(in_l / K) + 6) + nOut - 1 (see MlpCore header). K = inputs per clock:
     // the largest of 4, 3, 2, 1 that divides the pixels per word (two lanes per DSP up to 8 bit).
     // 32-bit stream, 8 bit -> 4 pixels per word -> K = 4; 32-bit stream, 6 bit -> 5 pixels per word -> K = 1
-    def fullSpeedCycles(net: NetworkModel, streamW: Int = 32): Int = {
-        val K = (4 to 1 by -1).find(ppbFor(net.quantization.activationBits, streamW) % _ == 0).get
+    // A fixed inputsPerClock is K itself; with multiplier "single" the automatic K stops at 2.
+    def fullSpeedCycles(net: NetworkModel, streamW: Int = 32, inputsPerClock: Int = 0, multiplier: String = "auto"): Int = {
+        val maxK = if (multiplier == "single") 2 else 4
+        val K = if (inputsPerClock > 0) inputsPerClock
+                else (maxK to 1 by -1).find(ppbFor(net.quantization.activationBits, streamW) % _ == 0).get
         net.layers.map(l => (l.inFeatures + K - 1) / K + 6).sum + net.layers.last.outFeatures - 1
     }
 
@@ -91,7 +96,8 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
     }
 
     // Logits, TLAST, done, RESULT and idle after the input; at full speed also the documented cycle count
-    def checkImage(dut: MlpCore, net: NetworkModel, x: Seq[Int], stall: Option[Random], streamW: Int = 32): Run = {
+    def checkImage(dut: MlpCore, net: NetworkModel, x: Seq[Int], stall: Option[Random], streamW: Int = 32,
+                   inputsPerClock: Int = 0, multiplier: String = "auto"): Run = {
         val want = reference(net, x)
         dut.io.start.poke(true.B); dut.clock.step(); dut.io.start.poke(false.B)   // CTRL start: clears OVF_COUNT
         val r = stream(dut, pack(x, net.quantization.activationBits, streamW), want.length, stall, streamW)
@@ -102,7 +108,7 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
         dut.io.busy.expect(false.B, "must be idle after the last beat")
         dut.io.ovf.expect(overflows(net, x).U, "OVF_COUNT = saturated hidden activations of this input")
         dut.io.err.expect(false.B, "a correct packet must not raise the packet error")
-        if (stall.isEmpty) assert(r.lastOut - r.firstIn == fullSpeedCycles(net, streamW), "cycles at full speed")
+        if (stall.isEmpty) assert(r.lastOut - r.firstIn == fullSpeedCycles(net, streamW, inputsPerClock, multiplier), "cycles at full speed")
         r
     }
 
@@ -189,6 +195,28 @@ class MlpCoreTest extends AnyFlatSpec with ChiselScalatestTester {
         }
     }
     
+    // inputsPerClock: auto or any divisor of the pixels per word (5 at 6 bit on a 32-bit stream), multiplier: auto, packed, single
+    it should s"match the reference model on random parallelism settings (seed $seed)" in {
+        val rnd = new Random(seed)
+        for (_ <- 0 until 6) {
+            val bits       = Seq(4, 6, 8)(rnd.nextInt(3))
+            val streamW    = Seq(8, 16, 32)(rnd.nextInt(3))
+            val ppbHere    = ppbFor(bits, streamW)
+            val inputs     = (0 +: (1 to ppbHere).filter(ppbHere % _ == 0))
+            val perClock   = inputs(rnd.nextInt(inputs.length))
+            val multiplier = Seq("auto", "packed", "single")(rnd.nextInt(3))
+            val net   = randomNet(rnd, QuantizationConfig(bits, bits))
+            val shape = (net.layers.head.inFeatures +: net.layers.map(_.outFeatures)).mkString(" -> ")
+            withClue(s"network $shape, $bits bit, streamW $streamW, inputsPerClock $perClock, $multiplier, seed $seed: ") {
+                test(new MlpCore(cfgFor(net, streamW, perClock, multiplier), net)) { dut =>
+                    def input() = Seq.fill(net.layers.head.inFeatures)(rnd.nextInt(1 << bits))
+                    for (_ <- 0 until 4) checkImage(dut, net, input(), Some(rnd), streamW, perClock, multiplier)
+                    for (_ <- 0 until 2) checkImage(dut, net, input(), None, streamW, perClock, multiplier)
+                }
+            }
+        }
+    }
+
     it should "run a batch of images back to back with TLAST only after the last one" in {
         val seed = sys.props.get("seed").map(_.toLong).getOrElse(System.nanoTime())
         val rnd  = new Random(seed)

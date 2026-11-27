@@ -123,8 +123,8 @@ Expected board output ends with `ALL PASSED`. The overlay and `smoke_test.py` al
 ## The MLP core
 
 `MlpCore` (`generator/src/main/scala/mlp/`) runs the whole network on one column of MACs, one per
-neuron of the widest layer; layer 0 consumes the pixels straight from the stream. 925 cycles per image
-for 784 -> 128 -> 10 at full speed.
+neuron of the widest layer; layer 0 consumes the pixels straight from the stream. 249 cycles per image
+for 784 -> 128 -> 10 at full speed with the default settings (see the parallelism table below).
 
 ```bash
 make board CORE=mlp                         # 32-bit beats: 784 pixels in, 10 signed scores out
@@ -137,3 +137,37 @@ with `WEIGHT_BITS` / `ACTIVATION_BITS` / `SHIFT_POLICY` into `$(BUILD)/quantized
 the board test checks against the same export. They are part of
 `CFG_HASH`, so a manifest from other weights is rejected by the driver. `RESULT` = argmax,
 `OVF_COUNT` = hidden activations that saturated since the last start (always 0 with `SHIFT_POLICY=worst`).
+
+### Architecture and parallelism
+
+`HIDDEN` sets the hidden layer widths of the trained network; the hardware follows the export, with one lane per
+neuron of the widest layer. Any width other than the default 128 gets its own `hidden-<widths>/` folders, so the
+committed model and export stay as they are:
+
+```bash
+make train HIDDEN=64,32                      # python/models/hidden-64-32/csv
+make reference HIDDEN=64,32                  # generator/generated/hidden-64-32/quantized
+make board CORE=mlp HIDDEN=64,32 BUILD=hw/vivado/hidden-64-32
+```
+
+Three settings trade multipliers for cycles on the same network (`mlp/Parallelism.scala`):
+
+| Variable | Values | Effect |
+|---|---|---|
+| `INPUTS_PER_CLOCK` | `auto`, or a divisor of the pixels per stream word (1, 2, 4 at 8 bit on 32-bit beats) | a layer of n inputs takes ceil(n / K) clocks |
+| `MULTIPLIER` | `auto`, `packed` (two lanes per DSP48E1, up to 8 bit), `single` | packed halves the multipliers |
+| `DSP_BUDGET` | `0` (no limit) or the most MAC multipliers allowed, e.g. `220` for the PYNQ-Z2 | `auto` settings take the fastest that fits; fixed ones that do not fit stop the build |
+
+For 784 -> 128 -> 10, cycles per image at full speed are `sum_l (ceil(in_l / K) + 6) + 9`:
+
+| K | packed multipliers | single multipliers | cycles |
+|---|---|---|---|
+| 1 | 64 | 128 | 933 |
+| 2 | 128 | 256 | 477 |
+| 4 | 256 | 512 | 249 |
+
+Unset, the core is packed with K = 4 (256 multipliers, 36 of them in LUTs on the PYNQ-Z2); `DSP_BUDGET=220`
+gives packed with K = 2. The budget counts the MAC multipliers as one DSP48E1 each, which is where all DSPs of
+the routed default build sit; DSPs that Vivado infers anywhere else are not counted, and `MULTIPLIER=single`
+has not been checked in Vivado yet. The choice is written to `hw_manifest.json` (`inputs_per_clock`,
+`multiplier`) and is part of `CFG_HASH`; the budget itself is not, so the same hardware always has the same hash.

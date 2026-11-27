@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 
 import activation.{Activation, ActivationArray}
-import mac.{Mac, MacArray, MacPair}
+import mac.{Mac, MacArray}
 import model.NetworkModel
 import shell.{AccelConfig, AccelCore}
 
@@ -33,9 +33,10 @@ import shell.{AccelConfig, AccelCore}
 //   Widths come from net.quantization (Mac and Activation use one width for weights and activations).
 //   OVF_COUNT = hidden activations that saturated since the last CTRL start (0 with shift policy "worst").
 //
-// Multipliers
-//   With Bits <= 8, lanes 2m and 2m+1 share one DSP48E1 per input (MacPair: a * (w1 * 2^16 + w0) gives
-//   both products), so N lanes x K inputs need N / 2 * K DSPs. MNIST, K = 4: 64 x 4 = 256 multipliers.
+// Multipliers (K and packed: Parallelism, from cfg.inputsPerClock, cfg.multiplier and cfg.dspBudget)
+//   packed: lanes 2m and 2m+1 share one DSP48E1 per input (MacPair: a * (w1 * 2^16 + w0) gives both
+//   products), so N lanes x K inputs need N / 2 * K DSPs. single: one multiplier per lane and input (Mac).
+//   MNIST, packed, K = 4: 64 x 4 = 256 multipliers.
 //
 // Pipeline
 //   WeightBanks latency 2 (read + output register); the input is registered twice to meet its weight.
@@ -62,9 +63,9 @@ class MlpCore(cfg: AccelConfig, net: NetworkModel) extends AccelCore(cfg) {
     val ppb     = cfg.pixelsPerBeat                     // pixels per stream word (e.g. 32 / 8 = 4)
     require(ppb * Bits <= cfg.streamW,
         s"pixelsPerBeat $ppb x $Bits bit does not fit a ${cfg.streamW}-bit stream word")
-    val pack    = MacPair.fits(Bits)                    // two lanes per DSP (MacPair)
-    val maxK    = if (pack) 4 else 2                    // 128 lanes: 64 x 4 packed or 128 x 2 = 256 multipliers
-    val K       = (maxK to 1 by -1).find(ppb % _ == 0).get   // must divide ppb so a group never spans two words
+    val parallelism = Parallelism.choose(cfg, net)
+    val pack    = parallelism.packed                    // two lanes per DSP (MacPair)
+    val K       = parallelism.inputsPerClock            // inputs per clock; divides ppb so a group never spans two words
     val groups  = layers.map(l => (l.inFeatures + K - 1) / K)   // bank rows (and clocks) per layer
     val layerBase = groups.scanLeft(0)(_ + _)           // first bank row of each layer; last element = total rows
 
