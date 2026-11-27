@@ -5,7 +5,8 @@
 
 This project is a hardware generator, written in Chisel, that turns a trained neural network into an
 accelerator on an FPGA. We train a small MLP (multilayer perceptron) in PyTorch, convert it to integers
-in Scala, and generate hardware that runs it on a PYNQ-Z2 board. The hardware gives exactly the same
+in Scala, and generate hardware that runs it on a PYNQ-Z2 board. For now the PYNQ-Z2 is the only
+supported board; we plan to support more boards later. The hardware gives exactly the same
 scores as our integer reference, bit for bit, and classifies an MNIST digit in 249 clock cycles
 (2.49 µs at 100 MHz). The same flow works for MNIST, Fashion-MNIST and KMNIST.
 
