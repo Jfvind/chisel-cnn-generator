@@ -17,11 +17,13 @@ scores as our integer reference, bit for bit, and classifies an MNIST digit in 2
   libraries itself. The trained weights and the test sets are in the repository, so nothing has to be
   trained first.
 - **Formal proof** (`make formal`): z3 as well, `pip install z3-solver` on Windows and macOS or
-  `sudo apt-get install z3` on Linux. The proof takes several minutes, so `make test` skips it.
+  `sudo apt-get install z3` on Linux. The proof takes several minutes, so it is not part of `make test`;
+  run it on its own with `make formal`.
 - **Python parts** (training, the Python cross-check, PC timing): Python 3.10 or newer with the packages
   in `python/requirements.txt`, see [python/README.md](python/README.md#setup).
 - **Hardware:** Vivado and a PYNQ-Z2 on the network. The one-time board setup is in
-  [hw/README.md](hw/README.md#prerequisites-checked-2026-10-14). On Windows, use Git Bash with GNU make.
+  [hw/README.md](hw/README.md#prerequisites-checked-2026-10-14). On Windows, install GNU make (for example
+  with winget); the commands work from PowerShell and Git Bash.
 
 ### Run MNIST on the FPGA, step by step
 
