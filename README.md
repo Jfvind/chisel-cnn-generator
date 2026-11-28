@@ -291,7 +291,28 @@ the 36 LUT multipliers, which Vivado places next to the bank outputs they read f
 read ports, not by size: each lane reads 4 weights per clock from its own bank, and each bank is only
 40 % full (228 x 32 bit). The whole network is about 813 Kbit.
 
-> **TODO before hand-in:** add the hardware usage of a 4-bit build and a 16-bit stream build (Jeppe).
+### Other configurations
+
+The generator picks K (inputs per clock) so that a group of K pixels never spans two stream words, so
+the bit width and the stream width change K, the number of multipliers and the clocks per image. Those
+follow from the configuration; LUT, FF, BRAM, DSP and timing are from the Vivado builds.
+
+| Build | Bits | Stream | Pixels / word | K | Multipliers | Cycles / image | LUT | FF | BRAM tiles | DSP | WNS |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Default (above) | 8 | 32 bit | 4 | 4 | 256 | 249 | 25,343 (47.6 %) | 16,214 | 66 | 220 | +0.297 ns |
+| 4-bit | 4 | 32 bit | 8 | 4 | 256 | 249 | 25,003 (47.0 %) | 16,806 | 9 | 0 | +0.199 ns |
+| 16-bit stream | 8 | 16 bit | 2 | 2 | 128 | 477 | 16,159 (30.4 %) | 15,097 | 66 | 128 | +0.114 ns |
+
+With a 16-bit stream only 2 pixels arrive per word, so K = 2: half the multipliers, all 128 in DSPs and
+none in LUTs, for (392 + 6) + (64 + 6) + 10 - 1 = 477 clocks per image, about twice as many. It also
+needs 9,200 fewer LUTs: there are no LUT multipliers, and each lane adds 2 products per clock instead of 4.
+
+With 4 bits the multipliers are only 4 x 12 bit, and Vivado builds all 256 of them from LUTs (7,140 LUTs
+for the MAC array, no DSPs). The weight banks are 228 x 16 bit, and Vivado makes most of them LUT ROM
+instead of BRAM: only 14 RAMB18 are left, so BRAM drops from 66 to 9 tiles while the LUT count stays about
+the same. The speed is unchanged (K = 4, 249 cycles), but the accuracy drops from 96.69 % to 90.53 %
+(integer reference, MNIST).
+
 
 ## Quantization
 
@@ -345,11 +366,9 @@ Results on the board:
 
 | Dataset | Test vectors bit-exact | Test images bit-exact | Accuracy on the FPGA |
 |---|---|---|---|
-| MNIST | TODO | TODO | TODO |
+| MNIST | 64 / 64 | 10,000 / 10,000 | 96.69 % |
 | Fashion-MNIST | 64 / 64 | 10,000 / 10,000 | 86.07 % |
 | KMNIST | 64 / 64 | 10,000 / 10,000 | 86.00 % |
-
-> **TODO before hand-in:** run `make board CORE=mlp` on MNIST and fill in the MNIST row (Jeppe).
 
 Because every score is bit-exact, the FPGA has exactly the accuracy of the integer reference in the
 quantization section.
