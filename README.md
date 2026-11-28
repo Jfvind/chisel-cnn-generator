@@ -272,20 +272,20 @@ In a batch the next image starts right after, so each image takes about 250 cloc
 
 ## Hardware usage (MNIST)
 
-MNIST MLP 784-128-10, 8-bit, on the PYNQ-Z2 (xc7z020) at 100 MHz, after routing (WNS +0.297 ns).
+MNIST MLP 784-128-10, 8-bit, on the PYNQ-Z2 (xc7z020) at 100 MHz, after routing (WNS +0.222 ns).
 128 lanes x 4 inputs per clock = 512 multiply-accumulates per clock, 249 cycles per image.
 
 | Block | LUT | FF | BRAM | DSP | Used for |
 |---|---|---|---|---|---|
-| MAC array (64 MacPairs) | 12,390 | 8,324 | - | 220 | Multiply, sum of 4 products, sign correction, accumulate |
-| Weight banks (128) | 6,994 | 0 | 128 x RAMB18 | - | One bank per lane |
-| MLP control | 2,939 | 3,977 | - | - | FSM, unpacker, activations/logits, ReLU/shift, argmax, packet check |
-| AXI-Lite registers | 159 | 82 | - | - | Register map |
-| Platform (DMA, interconnect) | 2,861 | 3,831 | 2 x RAMB36 | - | Same in every build |
-| **Total** | **25,343 (47.6 %)** | **16,214 (15.2 %)** | **66 / 140** | **220 / 220** | |
+| MAC array (64 MacPairs) | 12,206 | 8,356 | - | 220 | Multiply, sum of 4 products, sign correction, accumulate |
+| Weight banks (128) | 7,061 | 0 | 128 x RAMB18 | - | One bank per lane |
+| MLP control | 3,023 | 3,929 | - | - | FSM, unpacker, activations/logits, ReLU/shift, argmax, packet check |
+| AXI-Lite registers | 160 | 82 | - | - | Register map |
+| Platform (DMA, interconnect) | 2,862 | 3,831 | 2 x RAMB36 | - | Same in every build |
+| **Total** | **25,312 (47.6 %)** | **16,198 (15.2 %)** | **66 / 140** | **220 / 220** | |
 
 The DSPs are the limit: all 220 are used, and the remaining 36 multipliers are built from LUTs. In the
-utilization report those 36 MacPairs show 32 extra FFs: the product register that would otherwise sit
+utilization report those 36 MacPairs show about 32 extra FFs: the product register that would otherwise sit
 inside the DSP. The weight banks show about 7k LUTs although they are plain BRAM; these are most likely
 the 36 LUT multipliers, which Vivado places next to the bank outputs they read from. The number of BRAMs is set by
 read ports, not by size: each lane reads 4 weights per clock from its own bank, and each bank is only
@@ -295,17 +295,20 @@ read ports, not by size: each lane reads 4 weights per clock from its own bank, 
 
 The generator picks K (inputs per clock) so that a group of K pixels never spans two stream words, so
 the bit width and the stream width change K, the number of multipliers and the clocks per image. Those
-follow from the configuration; LUT, FF, BRAM, DSP and timing are from the Vivado builds.
+follow from the configuration; LUT, FF, BRAM, DSP and timing are from the Vivado builds, and the accuracy
+is the integer reference for each build's export (MNIST, 10,000 test images; the hardware is bit-exact
+with it, checked on the board for the 8-bit, 32-bit stream configuration).
 
-| Build | Bits | Stream | Pixels / word | K | Multipliers | Cycles / image | LUT | FF | BRAM tiles | DSP | WNS |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| Default (above) | 8 | 32 bit | 4 | 4 | 256 | 249 | 25,343 (47.6 %) | 16,214 | 66 | 220 | +0.297 ns |
-| 4-bit | 4 | 32 bit | 8 | 4 | 256 | 249 | 25,003 (47.0 %) | 16,806 | 9 | 0 | +0.199 ns |
-| 16-bit stream | 8 | 16 bit | 2 | 2 | 128 | 477 | 16,159 (30.4 %) | 15,097 | 66 | 128 | +0.114 ns |
+| Build | Bits | Stream | Pixels / word | K | Multipliers | Cycles / image | Accuracy | LUT | FF | BRAM tiles | DSP | WNS |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Default (above) | 8 | 32 bit | 4 | 4 | 256 | 249 | 96.69 % | 25,312 (47.6 %) | 16,198 | 66 | 220 | +0.222 ns |
+| 4-bit | 4 | 32 bit | 8 | 4 | 256 | 249 | 90.53 % | 25,003 (47.0 %) | 16,806 | 9 | 0 | +0.199 ns |
+| 16-bit stream | 8 | 16 bit | 2 | 2 | 128 | 477 | 96.69 % | 16,159 (30.4 %) | 15,097 | 66 | 128 | +0.114 ns |
 
 With a 16-bit stream only 2 pixels arrive per word, so K = 2: half the multipliers, all 128 in DSPs and
-none in LUTs, for (392 + 6) + (64 + 6) + 10 - 1 = 477 clocks per image, about twice as many. It also
-needs 9,200 fewer LUTs: there are no LUT multipliers, and each lane adds 2 products per clock instead of 4.
+none in LUTs, for (392 + 6) + (64 + 6) + 10 - 1 = 477 clocks per image, about twice as many, with the same
+96.69 %: the stream width only changes how the pixels arrive, not the arithmetic. It also
+needs about 9,150 fewer LUTs: there are no LUT multipliers, and each lane adds 2 products per clock instead of 4.
 
 With 4 bits the multipliers are only 4 x 12 bit, and Vivado builds all 256 of them from LUTs (7,140 LUTs
 for the MAC array, no DSPs). The weight banks are 228 x 16 bit, and Vivado makes most of them LUT ROM
@@ -376,7 +379,7 @@ quantization section.
 ### Speed
 
 The core needs 249 clock cycles for one image, which is 2.49 µs at 100 MHz. Timing is met at 100 MHz
-with 0.297 ns to spare, so the design could run at roughly 103 MHz.
+with 0.222 ns to spare, so the design could run at roughly 102 MHz.
 
 What the ARM sees is slower, because every run also goes through Python, the driver and the DMA. The
 table shows the time per image measured on the ARM for 2,000 MNIST images, with different numbers of
