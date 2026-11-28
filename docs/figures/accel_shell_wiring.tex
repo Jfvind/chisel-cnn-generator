@@ -47,7 +47,7 @@
   {\textbf{Register file}\\[2pt]\scriptsize ARG0--3 (byte strobes)\\\scriptsize CTRL $\rightarrow$ start / softReset\\\scriptsize done, CYCLES counter\\\scriptsize read mux (RegMap)\\\scriptsize SUM = ARG0 + ARG1};
 
 \node[mod, draw=data, fill=data!5, minimum width=4.4cm, minimum height=3.4cm] (core) at (14.4,0.6)
-  {\textbf{Core} \scriptsize(CoreIO)\\[2pt]\scriptsize MlpCore now, CNN later\\[2pt]\scriptsize reset = reset \texttt{||} softReset};
+  {\textbf{Core} \scriptsize(CoreIO)\\[2pt]\scriptsize MlpCore\\[2pt]\scriptsize reset = reset \texttt{||} softReset};
 
 % ---------------------------------------------------------------- external blocks
 \node[extblk, minimum height=3.8cm] (gp0)  at (-3.4,6.6)  {\textbf{PS7}\\\scriptsize M\_AXI\_GP0\\\scriptsize via interconnect};
